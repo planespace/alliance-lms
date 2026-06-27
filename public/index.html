@@ -1434,12 +1434,12 @@
                         placeholder="Position"
                       />
                     </td>
-                    <td>
-                      <input
-                        type="text"
-                        class="cm-photo"
-                        placeholder="URL (optional)"
-                      />
+                    <td style="display:flex; gap:4px; align-items:center;">
+                      <input type="text" class="cm-photo" placeholder="URL (optional)" style="flex:1;" />
+                      <label class="btn btn-secondary btn-sm" style="cursor:pointer; margin:0; white-space:nowrap;">📁
+                        <input type="file" accept="image/*" style="display:none;"
+                               onchange="var parent=this.closest('td'); var input=parent.querySelector('.cm-photo'); if(this.files[0]){ var reader=new FileReader(); reader.onload=function(e){ input.value=e.target.result; }; reader.readAsDataURL(this.files[0]); }" />
+                      </label>
                     </td>
                     <td>
                       <button

@@ -5587,17 +5587,44 @@ function handleImageUpload(file, previewImgId, urlInputId) {
     Swal.fire("Error", "Please select an image file.", "error");
     return;
   }
+
   const reader = new FileReader();
   reader.onload = function (e) {
-    const dataUrl = e.target.result;
-    // Set the hidden URL input value
-    document.getElementById(urlInputId).value = dataUrl;
-    // Show a small preview
-    const preview = document.getElementById(previewImgId);
-    if (preview) {
-      preview.src = dataUrl;
-      preview.style.display = "inline-block";
-    }
+    const img = new Image();
+    img.onload = function () {
+      // Resize to max 300x300 while keeping aspect ratio
+      const maxW = 300;
+      const maxH = 300;
+      let w = img.width;
+      let h = img.height;
+
+      if (w > maxW || h > maxH) {
+        const ratio = Math.min(maxW / w, maxH / h);
+        w = Math.round(w * ratio);
+        h = Math.round(h * ratio);
+      }
+
+      // Draw resized image on a canvas
+      const canvas = document.createElement("canvas");
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+
+      // Convert to base64 JPEG (80% quality → small size)
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+
+      // Set the hidden URL input value
+      document.getElementById(urlInputId).value = dataUrl;
+
+      // Show a small preview
+      const preview = document.getElementById(previewImgId);
+      if (preview) {
+        preview.src = dataUrl;
+        preview.style.display = "inline-block";
+      }
+    };
+    img.src = e.target.result;
   };
   reader.readAsDataURL(file);
 }
