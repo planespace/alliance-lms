@@ -181,22 +181,36 @@ async function bulkAddLibrarians() {
 }
 
 async function saveEntity(type, data, id = null) {
-  const url = id ? `${API_BASE}/${type}/${id}` : `${API_BASE}/${type}`;
-  const method = id ? "PUT" : "POST";
-  const headers = { "Content-Type": "application/json" };
-  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
-  const res = await fetch(url, { method, headers, body: JSON.stringify(data) });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(err);
+  showLoading();
+  try {
+    const url = id ? `${API_BASE}/${type}/${id}` : `${API_BASE}/${type}`;
+    const method = id ? "PUT" : "POST";
+    const headers = { "Content-Type": "application/json" };
+    if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+    const res = await fetch(url, {
+      method,
+      headers,
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(err);
+    }
+    return res.json();
+  } finally {
+    hideLoading();
   }
-  return res.json();
 }
 
 async function deleteEntity(type, id) {
-  const headers = {};
-  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
-  await fetch(`${API_BASE}/${type}/${id}`, { method: "DELETE", headers });
+  showLoading();
+  try {
+    const headers = {};
+    if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+    await fetch(`${API_BASE}/${type}/${id}`, { method: "DELETE", headers });
+  } finally {
+    hideLoading();
+  }
 }
 
 function saveData() {
