@@ -1514,7 +1514,7 @@ function renderLeafList(category, leafSectors) {
     › <span class="sector-path-current">📂 ${category.name}</span>
   </div>`;
   html += `<button class="btn btn-secondary btn-sm" onclick="currentSectorPath=[];renderSectors();">⬅ Back to Categories</button>`;
-  html += `<button class="btn btn-success btn-sm ml-8" onclick="openAddLeafModal('${category.id}')">+ Add Leaf Sector</button>`;
+  html += `<button class="btn btn-success btn-sm ml-8" onclick="openQuickAddLeafModal('${category.id}')">+ Add Leaf Sector</button>`;
   html += `<div style="margin-top:16px;"><h3>📄 Leaf Sectors in ${category.name}</h3></div>`;
 
   if (!leafSectors.length) {
@@ -1601,6 +1601,166 @@ function openAddLeafModal(categoryId) {
 
   const footer = modal.querySelector(".modal-footer");
   footer.innerHTML = `<button class="btn btn-secondary" onclick="closeModal('sectorModal')">Cancel</button><button class="btn btn-primary" onclick="goToWizardStep2()">Next →</button>`;
+}
+
+// ---------- QUICK ADD LEAF (single screen) ----------
+let quickSpecificDates = [];
+
+function openQuickAddLeafModal(categoryId) {
+  document.getElementById("quickParentCategoryId").value = categoryId;
+  // Reset form
+  document.getElementById("quickLeafName").value = "";
+  document.getElementById("quickLeafMin").value = "1";
+  document.getElementById("quickLeafDesc").value = "";
+  document.getElementById("quickDutyName").value = "";
+  document.getElementById("quickDutyStart").value = "";
+  document.getElementById("quickDutyEnd").value = "";
+  document
+    .querySelectorAll(".quick-duty-day")
+    .forEach((cb) => (cb.checked = false));
+  document.getElementById("quickRecurrence").value = "weekly";
+  document.getElementById("quickRecurrenceExtra").style.display = "none";
+  document.getElementById("quickSpecificDatesContainer").style.display = "none";
+  document.getElementById("quickEndDate").value = "";
+  document.getElementById("quickIsPunishment").value = "false";
+  quickSpecificDates = [];
+  document.getElementById("quickSpecificDatesList").innerHTML = "";
+  openModal("quickLeafModal");
+}
+
+function toggleQuickRecurrence() {
+  const rec = document.getElementById("quickRecurrence").value;
+  document.getElementById("quickRecurrenceExtra").style.display =
+    rec === "biweekly" ? "block" : "none";
+  document.getElementById("quickSpecificDatesContainer").style.display =
+    rec === "specific" ? "block" : "none";
+}
+
+function addQuickSpecificDate() {
+  const input = document.getElementById("quickSpecificDateInput");
+  const date = input.value;
+  if (!date) return;
+  if (quickSpecificDates.includes(date)) {
+    Swal.fire("Error", "Date already added.", "error");
+    return;
+  }
+  quickSpecificDates.push(date);
+  renderQuickSpecificDates();
+  input.value = "";
+}
+
+function removeQuickSpecificDate(date) {
+  quickSpecificDates = quickSpecificDates.filter((d) => d !== date);
+  renderQuickSpecificDates();
+}
+
+function renderQuickSpecificDates() {
+  const container = document.getElementById("quickSpecificDatesList");
+  container.innerHTML = quickSpecificDates
+    .map(
+      (d) =>
+        `<span>${formatDate(
+          d
+        )} <span class="remove-date" onclick="removeQuickSpecificDate('${d}')">×</span></span>`
+    )
+    .join("");
+}
+
+async function saveQuickLeaf() {
+  const categoryId = document.getElementById("quickParentCategoryId").value;
+  const name = document.getElementById("quickLeafName").value.trim();
+  const min = parseInt(document.getElementById("quickLeafMin").value);
+  const desc = document.getElementById("quickLeafDesc").value.trim();
+  const dutyName = document.getElementById("quickDutyName").value.trim();
+  const start = document.getElementById("quickDutyStart").value;
+  const end = document.getElementById("quickDutyEnd").value;
+  const recurrence = document.getElementById("quickRecurrence").value;
+  const isPunishment =
+    document.getElementById("quickIsPunishment").value === "true";
+  const endDate = document.getElementById("quickEndDate").value || null;
+  const interval =
+    recurrence === "biweekly"
+      ? parseInt(document.getElementById("quickRecurrenceInterval").value) || 1
+      : null;
+  const specificDates =
+    recurrence === "specific" ? [...quickSpecificDates] : null;
+
+  const days = [];
+  document
+    .querySelectorAll(".quick-duty-day:checked")
+    .forEach((cb) => days.push(cb.value));
+
+  if (!name) {
+    Swal.fire("Error", "Leaf name is required.", "error");
+    return;
+  }
+  if (!min || min < 1) {
+    Swal.fire("Error", "Min people must be at least 1.", "error");
+    return;
+  }
+  if (!dutyName || !start || !end) {
+    Swal.fire("Error", "Duty name, start, and end time are required.", "error");
+    return;
+  }
+  if (start >= end) {
+    Swal.fire("Error", "End time must be after start.", "error");
+    return;
+  }
+  if (days.length === 0) {
+    Swal.fire("Error", "Select at least one day.", "error");
+    return;
+  }
+
+  const newSector = {
+    name,
+    parent_id: categoryId,
+    leader_ids: [],
+    min_people: min,
+    is_leaf: true,
+    description: desc || null,
+    duty_settings_list: [
+      {
+        name: dutyName,
+        start_time: start,
+        end_time: end,
+        days,
+        recurrence,
+        recurrence_interval: interval,
+        specific_dates: specificDates,
+        is_punishment: isPunishment,
+        end_date: endDate,
+      },
+    ],
+    created_at: new Date().toISOString(),
+  };
+
+  const savedSector = await saveEntity("sectors", newSector);
+  appData.sectors.push(savedSector);
+
+  const newDuty = {
+    name: dutyName,
+    start_time: start,
+    end_time: end,
+    days,
+    recurrence_type: recurrence,
+    specific_dates: specificDates,
+    recurrence_interval: interval,
+    end_date: endDate || null,
+    is_punishment: isPunishment,
+    sector_id: savedSector.id,
+    created_by: appData.current_user,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+  const savedDuty = await saveEntity("duties", newDuty);
+  appData.duties.push(savedDuty);
+
+  // Navigate to the new leaf
+  currentSectorPath = [categoryId];
+  selectedLeafId = savedSector.id;
+  closeModal("quickLeafModal");
+  renderCurrentPage();
+  toast(`Leaf sector "${name}" added.`);
 }
 
 function goToWizardStep2() {

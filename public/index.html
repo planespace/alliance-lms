@@ -575,6 +575,224 @@
               </form>
             </div>
           </div>
+
+          <!-- Quick Add Leaf Sector Modal (single screen) -->
+          <div class="modal-overlay" id="quickLeafModal">
+            <div class="modal fullscreen">
+              <div class="modal-header">
+                <h3>📄 Add Leaf Sector</h3>
+                <button
+                  class="close-btn"
+                  onclick="closeModal('quickLeafModal')"
+                >
+                  ×
+                </button>
+              </div>
+              <div class="modal-body quick-leaf-body">
+                <!-- Basic Info -->
+                <div class="form-group">
+                  <label>Leaf Sector Name *</label>
+                  <input
+                    type="text"
+                    id="quickLeafName"
+                    placeholder="e.g., Fiction Shelves 3-5"
+                  />
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Minimum People Required *</label>
+                    <input type="number" id="quickLeafMin" value="1" min="1" />
+                  </div>
+                  <div class="form-group">
+                    <label>Description (optional)</label>
+                    <input
+                      type="text"
+                      id="quickLeafDesc"
+                      placeholder="Brief description"
+                    />
+                  </div>
+                </div>
+
+                <!-- Duty Settings -->
+                <h4
+                  style="
+                    border-top: 2px solid var(--border);
+                    padding-top: 16px;
+                    margin-top: 16px;
+                  "
+                >
+                  ⚙️ Duty Settings
+                </h4>
+                <div class="form-group">
+                  <label>Duty Name *</label>
+                  <input
+                    type="text"
+                    id="quickDutyName"
+                    placeholder="e.g., Fiction Duty"
+                  />
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Start Time *</label>
+                    <input type="time" id="quickDutyStart" />
+                  </div>
+                  <div class="form-group">
+                    <label>End Time *</label>
+                    <input type="time" id="quickDutyEnd" />
+                  </div>
+                </div>
+                <div class="form-group">
+                  <label>Days *</label>
+                  <div class="day-checkboxes">
+                    <label
+                      ><input
+                        type="checkbox"
+                        class="quick-duty-day"
+                        value="Monday"
+                      />
+                      Mon</label
+                    >
+                    <label
+                      ><input
+                        type="checkbox"
+                        class="quick-duty-day"
+                        value="Tuesday"
+                      />
+                      Tue</label
+                    >
+                    <label
+                      ><input
+                        type="checkbox"
+                        class="quick-duty-day"
+                        value="Wednesday"
+                      />
+                      Wed</label
+                    >
+                    <label
+                      ><input
+                        type="checkbox"
+                        class="quick-duty-day"
+                        value="Thursday"
+                      />
+                      Thu</label
+                    >
+                    <label
+                      ><input
+                        type="checkbox"
+                        class="quick-duty-day"
+                        value="Friday"
+                      />
+                      Fri</label
+                    >
+                    <label
+                      ><input
+                        type="checkbox"
+                        class="quick-duty-day"
+                        value="Saturday"
+                      />
+                      Sat</label
+                    >
+                    <label
+                      ><input
+                        type="checkbox"
+                        class="quick-duty-day"
+                        value="Sunday"
+                      />
+                      Sun</label
+                    >
+                  </div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>Recurrence</label>
+                    <select
+                      id="quickRecurrence"
+                      onchange="toggleQuickRecurrence()"
+                    >
+                      <option value="weekly">Weekly</option>
+                      <option value="biweekly">After X Weeks</option>
+                      <option value="forever">Forever</option>
+                      <option value="specific">Specific Dates</option>
+                    </select>
+                  </div>
+                  <div
+                    class="form-group"
+                    id="quickRecurrenceExtra"
+                    style="display: none"
+                  >
+                    <label>After how many weeks?</label>
+                    <input
+                      type="number"
+                      id="quickRecurrenceInterval"
+                      value="1"
+                      min="1"
+                    />
+                  </div>
+                </div>
+                <div
+                  class="form-group"
+                  id="quickSpecificDatesContainer"
+                  style="display: none"
+                >
+                  <label>Specific Dates</label>
+                  <div
+                    style="
+                      display: flex;
+                      flex-wrap: wrap;
+                      gap: 6px;
+                      align-items: center;
+                    "
+                  >
+                    <input
+                      type="date"
+                      id="quickSpecificDateInput"
+                      style="flex: 1; min-width: 150px"
+                    />
+                    <button
+                      class="btn btn-secondary btn-sm"
+                      onclick="addQuickSpecificDate()"
+                    >
+                      + Add Date
+                    </button>
+                  </div>
+                  <div
+                    id="quickSpecificDatesList"
+                    style="
+                      display: flex;
+                      flex-wrap: wrap;
+                      gap: 4px;
+                      margin-top: 6px;
+                    "
+                  ></div>
+                </div>
+                <div class="form-row">
+                  <div class="form-group">
+                    <label>End Date (optional)</label>
+                    <input type="date" id="quickEndDate" />
+                  </div>
+                  <div class="form-group">
+                    <label>Punishment Duty?</label>
+                    <select id="quickIsPunishment">
+                      <option value="false">No</option>
+                      <option value="true">Yes (Red styling)</option>
+                    </select>
+                  </div>
+                </div>
+                <input type="hidden" id="quickParentCategoryId" />
+              </div>
+              <div class="modal-footer">
+                <button
+                  class="btn btn-secondary"
+                  onclick="closeModal('quickLeafModal')"
+                >
+                  Cancel
+                </button>
+                <button class="btn btn-primary" onclick="saveQuickLeaf()">
+                  💾 Save Leaf Sector
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </main>
     </div>

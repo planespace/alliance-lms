@@ -2359,3 +2359,33 @@ table tbody tr:hover td {
   padding: 4px 12px;
   border-radius: 20px;
 }
+
+/* --- Quick Leaf Modal – compact scrollable layout --- */
+.quick-leaf-body {
+  max-height: 70vh;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+.quick-leaf-body h4 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--primary);
+  margin: 8px 0 12px;
+}
+
+/* Ensure date chips in specific dates list are styled */
+#quickSpecificDatesList span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  background: #f8fafc;
+  border-radius: 12px;
+  font-size: 13px;
+}
+#quickSpecificDatesList span .remove-date {
+  cursor: pointer;
+  color: #e53e3e;
+  font-weight: bold;
+}
