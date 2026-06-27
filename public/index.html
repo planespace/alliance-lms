@@ -1,0 +1,1628 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Alliance Library Management System</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- ============================================
+    LOGIN PAGE
+    ============================================ -->
+    <div id="loginPage" class="login-container">
+      <div class="login-box">
+        <div class="logo">📚</div>
+        <h1>Alliance <span>LMS</span></h1>
+        <p class="subtitle">Library Management System — Committee Login</p>
+
+        <label>Username or Email</label>
+        <input
+          type="text"
+          id="loginUsername"
+          placeholder="Enter username or email"
+          value="admin"
+        />
+
+        <label>Password</label>
+        <input
+          type="password"
+          id="loginPassword"
+          placeholder="Enter password"
+          value="admin123"
+        />
+
+        <button class="login-btn" onclick="handleLogin()">Sign In</button>
+        <div id="loginError" class="error">
+          Invalid credentials. Please try again.
+        </div>
+
+        <div class="default-hint">Default: admin / admin123</div>
+      </div>
+    </div>
+
+    <!-- ============================================
+    MAIN APP
+    ============================================ -->
+    <div id="appContainer" class="app-container">
+      <!-- SIDEBAR -->
+      <aside class="sidebar" id="sidebar">
+        <div class="brand">
+          <span class="logo-icon">📚</span>
+          Alliance <span>LMS</span>
+        </div>
+        <nav>
+          <div class="nav-label">Main</div>
+          <a
+            class="active"
+            data-page="dashboard"
+            onclick="navigateTo('dashboard')"
+          >
+            <span class="icon">📊</span> Dashboard
+          </a>
+          <a data-page="sectors" onclick="navigateTo('sectors')">
+            <span class="icon">📂</span> Sectors
+          </a>
+          <a data-page="duties" onclick="navigateTo('duties')">
+            <span class="icon">📋</span> Duties
+            <span class="badge" id="dutyBadge">0</span>
+          </a>
+          <a data-page="attendance" onclick="navigateTo('attendance')">
+            <span class="icon">✅</span> Attendance
+          </a>
+          <a data-page="notifications" onclick="navigateTo('notifications')">
+            <span class="icon">🔔</span> Notifications
+            <span class="badge" id="notificationBadge">0</span>
+          </a>
+          <div class="nav-label" style="margin-top: 16px">Records</div>
+          <a data-page="halloffame" onclick="navigateTo('halloffame')">
+            <span class="icon">🏆</span> Hall of Fame
+          </a>
+          <a data-page="committee" onclick="navigateTo('committee')">
+            <span class="icon">👥</span> Committee
+          </a>
+          <a data-page="archive" onclick="navigateTo('archive')">
+            <span class="icon">🗄️</span> Archive
+          </a>
+          <a class="logout-link" onclick="handleLogout()">
+            <span class="icon">🚪</span> Logout
+          </a>
+        </nav>
+      </aside>
+
+      <!-- MAIN CONTENT -->
+      <main class="main-content">
+        <!-- TOP BAR -->
+        <div class="top-bar-fixed">
+          <div class="top-bar-inner">
+            <div class="top-bar-left">
+              <button class="menu-toggle" onclick="toggleSidebar()">☰</button>
+              <h2 id="pageTitle">Dashboard</h2>
+            </div>
+            <div class="date-navigator">
+              <button onclick="changeDate(-1)" title="Previous day">◀</button>
+              <input type="date" id="viewDate" onchange="onDateChange()" />
+              <button onclick="changeDate(1)" title="Next day">▶</button>
+              <button class="btn btn-secondary btn-sm" onclick="setToday()">
+                Today
+              </button>
+              <span class="date-display" id="dateDisplay"></span>
+            </div>
+            <div class="top-bar-right">
+              <span class="user-avatar" id="userAvatar">A</span>
+              <span id="currentUser">admin</span>
+              <button class="logout-btn" onclick="handleLogout()">
+                Logout
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- PAGE CONTENT -->
+        <div class="page-content">
+          <!-- ==========================================
+                PAGE: DASHBOARD
+                ========================================== -->
+          <div id="page-dashboard" class="page active">
+            <div class="quick-actions">
+              <button
+                class="btn btn-primary"
+                onclick="openModal('attendanceModal')"
+              >
+                ✅ Mark Today's Attendance
+              </button>
+              <button class="btn btn-success" onclick="openCreateDuty()">
+                📋 Create New Duty
+              </button>
+              <button
+                class="btn btn-primary"
+                onclick="openModal('librarianModal')"
+              >
+                👤 Add Junior Librarian
+              </button>
+            </div>
+
+            <div class="stats-grid" id="dashboardStats">
+              <div class="stat-card">
+                <div class="number" id="statLibrarians">0</div>
+                <div class="label">Total Junior Librarians</div>
+              </div>
+              <div class="stat-card">
+                <div class="number" id="statDutiesToday">0</div>
+                <div class="label">Duties Today</div>
+              </div>
+              <div class="stat-card">
+                <div class="number" id="statMissed">0</div>
+                <div class="label">Missed Duties</div>
+              </div>
+              <div class="stat-card">
+                <div class="number" id="statAttendance">0%</div>
+                <div class="label">Avg Attendance</div>
+              </div>
+            </div>
+
+            <div class="table-container">
+              <div class="table-header">
+                <div class="left">
+                  <span>📋 Junior Librarians</span>
+                  <select
+                    id="dashboardSearchType"
+                    onchange="renderDashboardTable()"
+                  >
+                    <option value="name">Search by Name</option>
+                    <option value="grade">Search by Grade</option>
+                    <option value="adm">Search by Adm No.</option>
+                  </select>
+                  <input
+                    type="text"
+                    id="dashboardSearch"
+                    placeholder="Search..."
+                    oninput="renderDashboardTable()"
+                  />
+
+                  <select id="dashboardSort" onchange="renderDashboardTable()">
+                    <option value="newest">Newest First</option>
+                    <option value="oldest">Oldest First</option>
+                    <option value="name">Name (A-Z)</option>
+                    <option value="attendance">Attendance</option>
+                  </select>
+                </div>
+                <div>
+                  <button
+                    class="btn btn-primary btn-sm"
+                    onclick="openModal('librarianModal')"
+                  >
+                    + Add
+                  </button>
+                  <button
+                    class="btn btn-success btn-sm"
+                    onclick="openModal('bulkModal')"
+                  >
+                    📥 Bulk Add
+                  </button>
+                </div>
+              </div>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Grade</th>
+                      <th>Adm No.</th>
+                      <th>House</th>
+                      <!-- ✅ added -->
+                      <th>Sectors</th>
+                      <th>Tags</th>
+                      <th>Attendance</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="dashboardTableBody">
+                    <!-- Rows rendered by JavaScript -->
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <!-- ==========================================
+                PAGE: SECTORS
+                ========================================== -->
+          <div id="page-sectors" class="page">
+            <div class="sector-controls">
+              <div>
+                <button
+                  class="btn btn-primary"
+                  onclick="openModal('sectorModal')"
+                >
+                  📁 Add Category
+                </button>
+                <button
+                  class="btn btn-success"
+                  onclick="openModal('autoAssignModal')"
+                >
+                  🔄 Auto-Assign
+                </button>
+                <button
+                  class="btn btn-warning"
+                  onclick="openModal('revertModal')"
+                >
+                  ↩️ Revert
+                </button>
+              </div>
+              <div>
+                <input
+                  type="text"
+                  id="sectorSearch"
+                  placeholder="Search sectors..."
+                  oninput="renderSectors()"
+                />
+                <label
+                  ><input
+                    type="checkbox"
+                    id="hideEmpty"
+                    onchange="renderSectors()"
+                  />
+                  Hide Empty</label
+                >
+              </div>
+            </div>
+            <div id="sectorContainer"></div>
+          </div>
+
+          <!-- ==========================================
+                PAGE: DUTIES
+                ========================================== -->
+          <div id="page-duties" class="page">
+            <div class="duty-controls">
+              <div>
+                <button class="btn btn-primary" onclick="openCreateDuty()">
+                  📋 Create Duty
+                </button>
+                <select id="dutyFilter" onchange="renderDuties()">
+                  <option value="today">Today's Duties</option>
+                  <option value="week">This Week</option>
+                  <option value="all" selected>All Active</option>
+                  <option value="punishment">Punishment Only</option>
+                </select>
+                <label
+                  ><input
+                    type="checkbox"
+                    id="dutyHasLibrarians"
+                    onchange="renderDuties()"
+                  />
+                  Has Librarians</label
+                >
+              </div>
+              <button
+                class="btn btn-secondary btn-sm"
+                onclick="toggleDutyView()"
+              >
+                📅 Calendar View
+              </button>
+            </div>
+            <div id="dutyContainer"></div>
+          </div>
+
+          <!-- ==========================================
+                PAGE: ATTENDANCE
+                ========================================== -->
+          <div id="page-attendance" class="page">
+            <div class="attendance-controls">
+              <div class="date-navigator">
+                <button onclick="changeAttendanceDate(-1)" title="Previous day">
+                  ◀
+                </button>
+                <input
+                  type="date"
+                  id="attendanceDate"
+                  onchange="renderAttendance()"
+                />
+                <button onclick="changeAttendanceDate(1)" title="Next day">
+                  ▶
+                </button>
+              </div>
+              <span id="attendanceStatus"></span>
+            </div>
+            <div id="attendanceContainer"></div>
+          </div>
+
+          <!-- ==========================================
+                PAGE: NOTIFICATIONS
+                ========================================== -->
+          <div id="page-notifications" class="page">
+            <div class="notification-controls">
+              <h3>🔔 Notifications</h3>
+              <div>
+                <button
+                  class="btn btn-secondary btn-sm"
+                  id="dismissedToggleBtn"
+                  onclick="toggleDismissed()"
+                >
+                  📁 Dismissed
+                </button>
+              </div>
+            </div>
+            <div id="notificationContainer"></div>
+          </div>
+
+          <!-- ==========================================
+      PAGE: HALL OF FAME
+      ========================================== -->
+          <div id="page-halloffame" class="page">
+            <div class="hall-controls">
+              <h3>🏆 Hall of Fame</h3>
+              <!-- Buttons are now shown inside the tab content, not here -->
+            </div>
+            <div class="hall-tabs">
+              <button
+                class="hall-tab active"
+                data-tab="captains"
+                onclick="switchHallTab('captains')"
+              >
+                👑 Captains
+              </button>
+              <button
+                class="hall-tab"
+                data-tab="committees"
+                onclick="switchHallTab('committees')"
+              >
+                📋 Committees
+              </button>
+            </div>
+            <div id="hallContainer"></div>
+          </div>
+
+          <!-- ==========================================
+                PAGE: COMMITTEE
+                ========================================== -->
+          <div id="page-committee" class="page">
+            <div
+              style="
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 20px;
+              "
+            >
+              <h3>👥 Library Committee</h3>
+              <button
+                class="btn btn-primary"
+                onclick="openModal('committeeModal')"
+              >
+                + Add Committee
+              </button>
+            </div>
+            <div id="committeeContainer"></div>
+          </div>
+
+          <!-- ==========================================
+                PAGE: ARCHIVE
+                ========================================== -->
+          <div id="page-archive" class="page">
+            <h3>🗄️ Archived Junior Librarians</h3>
+            <div id="archiveContainer"></div>
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <!-- ============================================
+    MODALS
+    ============================================ -->
+
+    <!-- Add Junior Librarian Modal -->
+    <div class="modal-overlay" id="librarianModal">
+      <div class="modal fullscreen">
+        <div class="modal-header">
+          <h3>👤 Add Junior Librarian</h3>
+          <button class="close-btn" onclick="closeModal('librarianModal')">
+            ×
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Full Name</label>
+            <input type="text" id="libName" placeholder="e.g., James Mwangi" />
+          </div>
+          <div class="form-group">
+            <label>Grade</label>
+            <input
+              type="text"
+              id="libGrade"
+              placeholder="e.g., 10A, 10H, 10Z"
+            />
+          </div>
+          <div class="form-group">
+            <label>House (optional)</label>
+            <input
+              type="text"
+              id="libHouse"
+              placeholder="e.g., Sanders, Livingstone"
+            />
+          </div>
+          <!-- ✅ added -->
+          <div class="form-group">
+            <label>Admission Number</label>
+            <input type="text" id="libAdm" placeholder="e.g., 2024001" />
+          </div>
+          <div class="form-group">
+            <label>Date Joined</label>
+            <input type="date" id="libJoined" />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button
+            class="btn btn-secondary"
+            onclick="closeModal('librarianModal')"
+          >
+            Cancel
+          </button>
+          <button class="btn btn-primary" onclick="addLibrarian()">
+            Add Librarian
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bulk Add Modal (already has House) -->
+    <div class="modal-overlay" id="bulkModal">
+      <div class="modal fullscreen">
+        <div class="modal-header">
+          <h3>📥 Bulk Add Junior Librarians</h3>
+          <button class="close-btn" onclick="closeModal('bulkModal')">×</button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted">
+            Add multiple librarians at once. Fill in the table below.
+          </p>
+          <div class="table-scroll">
+            <table class="bulk-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Grade</th>
+                  <th>Adm No.</th>
+                  <th>House</th>
+                  <th>Joined</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="bulkBody">
+                <tr>
+                  <td>
+                    <input type="text" class="bulk-name" placeholder="Name" />
+                  </td>
+                  <td>
+                    <input type="text" class="bulk-grade" placeholder="Grade" />
+                  </td>
+                  <td>
+                    <input type="text" class="bulk-adm" placeholder="Adm No." />
+                  </td>
+                  <td>
+                    <input
+                      type="text"
+                      class="bulk-house"
+                      placeholder="House (optional)"
+                    />
+                  </td>
+                  <td><input type="date" class="bulk-joined" /></td>
+                  <td>
+                    <button
+                      class="btn btn-danger btn-sm"
+                      onclick="this.closest('tr').remove()"
+                    >
+                      ✕
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="addBulkRow()">
+            + Add Row
+          </button>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('bulkModal')">
+            Cancel
+          </button>
+          <button class="btn btn-success" onclick="bulkAddLibrarians()">
+            Add All
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sector Modal -->
+    <div class="modal-overlay" id="sectorModal">
+      <div class="modal fullscreen">
+        <div class="modal-header">
+          <h3>📁 Add Category / Sub-category</h3>
+          <button class="close-btn" onclick="closeModal('sectorModal')">
+            ×
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Name</label>
+            <input type="text" id="sectorName" placeholder="e.g., Fiction" />
+          </div>
+
+          <div class="form-group" id="sectorMinGroup">
+            <label>Minimum People Required</label>
+            <input type="number" id="sectorMin" value="1" min="1" />
+          </div>
+          <div class="form-group">
+            <label>Description (optional)</label>
+            <input
+              type="text"
+              id="sectorDesc"
+              placeholder="Brief description"
+            />
+          </div>
+          <div class="form-group checkbox-group">
+            <label
+              ><input
+                type="checkbox"
+                id="sectorIsLeaf"
+                onchange="toggleSectorIsLeaf()"
+              />
+              This is a Leaf Node (can add people)</label
+            >
+            <span
+              style="
+                color: #1e293b;
+                font-weight: 500;
+                font-size: 14px;
+                display: block;
+                margin-top: 6px;
+              "
+            >
+              📌 <strong>Leaf nodes</strong> are the only places where junior
+              librarians can be assigned. Leave this box
+              <strong>unchecked</strong> to keep creating sub‑categories – you
+              can nest as many levels as you need.
+              <strong>Check it</strong> when this is the final level and you’re
+              ready to place people.
+            </span>
+          </div>
+          <div
+            id="sectorDutySettings"
+            style="
+              display: none;
+              margin-top: 20px;
+              border-top: 2px solid var(--border);
+              padding-top: 16px;
+            "
+          >
+            <h4 style="font-size: 16px; font-weight: 700; margin-bottom: 12px">
+              ⚙️ Duty Timing (for this leaf sector)
+            </h4>
+            <div class="form-group">
+              <label>Duty Name</label>
+              <input
+                type="text"
+                id="sectorDutyName"
+                placeholder="e.g., Fiction Duty"
+              />
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Start Time</label>
+                <input type="time" id="sectorDutyStart" />
+              </div>
+              <div class="form-group">
+                <label>End Time</label>
+                <input type="time" id="sectorDutyEnd" />
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Days</label>
+              <div class="day-checkboxes">
+                <label
+                  ><input
+                    type="checkbox"
+                    class="sector-duty-day"
+                    value="Monday"
+                  />
+                  Mon</label
+                >
+                <label
+                  ><input
+                    type="checkbox"
+                    class="sector-duty-day"
+                    value="Tuesday"
+                  />
+                  Tue</label
+                >
+                <label
+                  ><input
+                    type="checkbox"
+                    class="sector-duty-day"
+                    value="Wednesday"
+                  />
+                  Wed</label
+                >
+                <label
+                  ><input
+                    type="checkbox"
+                    class="sector-duty-day"
+                    value="Thursday"
+                  />
+                  Thu</label
+                >
+                <label
+                  ><input
+                    type="checkbox"
+                    class="sector-duty-day"
+                    value="Friday"
+                  />
+                  Fri</label
+                >
+                <label
+                  ><input
+                    type="checkbox"
+                    class="sector-duty-day"
+                    value="Saturday"
+                  />
+                  Sat</label
+                >
+                <label
+                  ><input
+                    type="checkbox"
+                    class="sector-duty-day"
+                    value="Sunday"
+                  />
+                  Sun</label
+                >
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Recurrence</label>
+                <select
+                  id="sectorDutyRecurrence"
+                  onchange="toggleSectorDutyRecurrence()"
+                >
+                  <option value="weekly">Weekly</option>
+                  <option value="biweekly">After X Weeks</option>
+                  <option value="forever">Forever</option>
+                  <option value="specific">Specific Dates</option>
+                </select>
+              </div>
+              <div
+                class="form-group"
+                id="sectorRecurrenceExtra"
+                style="display: none"
+              >
+                <label>After how many weeks?</label>
+                <input
+                  type="number"
+                  id="sectorRecurrenceInterval"
+                  value="1"
+                  min="1"
+                />
+              </div>
+            </div>
+            <div
+              class="form-group"
+              id="sectorSpecificDatesContainer"
+              style="display: none"
+            >
+              <label>Select Specific Dates</label>
+              <div
+                style="
+                  display: flex;
+                  flex-wrap: wrap;
+                  gap: 6px;
+                  align-items: center;
+                "
+              >
+                <input
+                  type="date"
+                  id="sectorSpecificDateInput"
+                  style="flex: 1; min-width: 150px"
+                />
+                <button
+                  class="btn btn-secondary btn-sm"
+                  onclick="addSectorSpecificDate()"
+                >
+                  + Add Date
+                </button>
+              </div>
+              <div
+                id="sectorSpecificDatesList"
+                style="
+                  display: flex;
+                  flex-wrap: wrap;
+                  gap: 4px;
+                  margin-top: 6px;
+                "
+              ></div>
+            </div>
+            <div class="form-group">
+              <label>End Date (optional)</label>
+              <input type="date" id="sectorDutyEndDate" />
+            </div>
+            <div class="form-group">
+              <label>Punishment Duty?</label>
+              <select id="sectorDutyIsPunishment">
+                <option value="false">No</option>
+                <option value="true">Yes (Red styling)</option>
+              </select>
+            </div>
+            <!-- You can also add librarian assignment if needed, but it’s optional for a sector -->
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('sectorModal')">
+            Cancel
+          </button>
+          <button class="btn btn-primary" onclick="addSector()">
+            Add Sector
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Create Duty Modal (Fullscreen) -->
+    <div class="modal-overlay" id="dutyModal">
+      <div class="modal fullscreen">
+        <div class="modal-header">
+          <h3>📋 Create Duty</h3>
+          <button class="close-btn" onclick="closeModal('dutyModal')">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Duty Name</label>
+            <input
+              type="text"
+              id="dutyName"
+              placeholder="e.g., Morning Break Duty"
+            />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Start Time</label>
+              <input type="time" id="dutyStart" />
+            </div>
+            <div class="form-group">
+              <label>End Time</label>
+              <input type="time" id="dutyEnd" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Days</label>
+            <div class="day-checkboxes">
+              <label
+                ><input type="checkbox" class="duty-day" value="Monday" />
+                Mon</label
+              >
+              <label
+                ><input type="checkbox" class="duty-day" value="Tuesday" />
+                Tue</label
+              >
+              <label
+                ><input type="checkbox" class="duty-day" value="Wednesday" />
+                Wed</label
+              >
+              <label
+                ><input type="checkbox" class="duty-day" value="Thursday" />
+                Thu</label
+              >
+              <label
+                ><input type="checkbox" class="duty-day" value="Friday" />
+                Fri</label
+              >
+              <label
+                ><input type="checkbox" class="duty-day" value="Saturday" />
+                Sat</label
+              >
+              <label
+                ><input type="checkbox" class="duty-day" value="Sunday" />
+                Sun</label
+              >
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>Recurrence</label>
+              <select id="dutyRecurrence" onchange="toggleRecurrenceOptions()">
+                <option value="weekly">Weekly</option>
+                <option value="biweekly">After X Weeks</option>
+                <option value="forever">Forever</option>
+                <option value="specific">Specific Dates</option>
+              </select>
+            </div>
+            <div class="form-group" id="recurrenceExtra" style="display: none">
+              <label id="recurrenceExtraLabel">After how many weeks?</label>
+              <input type="number" id="recurrenceInterval" value="1" min="1" />
+            </div>
+          </div>
+          <div
+            class="form-group"
+            id="specificDatesContainer"
+            style="display: none"
+          >
+            <label>Select Specific Dates</label>
+            <div
+              style="
+                display: flex;
+                flex-wrap: wrap;
+                gap: 6px;
+                align-items: center;
+              "
+            >
+              <input
+                type="date"
+                id="specificDateInput"
+                style="flex: 1; min-width: 150px"
+              />
+              <button
+                class="btn btn-secondary btn-sm"
+                onclick="addSpecificDate()"
+              >
+                + Add Date
+              </button>
+            </div>
+            <div
+              id="specificDatesList"
+              style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px"
+            ></div>
+          </div>
+          <div class="form-group">
+            <label>End Date (optional)</label>
+            <input type="date" id="dutyEndDate" />
+          </div>
+          <div class="form-group">
+            <label>Punishment Duty?</label>
+            <select id="dutyIsPunishment">
+              <option value="false">No</option>
+              <option value="true">Yes (Red styling)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Assign to Junior Librarians</label>
+            <div
+              id="dutyLibrarianCheckboxes"
+              style="
+                padding: 10px;
+                border: 1px solid var(--border);
+                border-radius: var(--radius-sm);
+                margin: 6px 0;
+              "
+            ></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('dutyModal')">
+            Cancel
+          </button>
+          <button class="btn btn-primary" onclick="createDuty()">
+            Create Duty
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Attendance Modal (Mark Today's Attendance) -->
+    <div class="modal-overlay" id="attendanceModal">
+      <div class="modal fullscreen">
+        <div class="modal-header">
+          <h3>✅ Mark Today's Attendance</h3>
+          <button class="close-btn" onclick="closeModal('attendanceModal')">
+            ×
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Date</label>
+            <input
+              type="date"
+              id="attendanceModalDate"
+              onchange="renderAttendanceModal()"
+            />
+          </div>
+          <div id="attendanceModalContainer"></div>
+        </div>
+        <div class="modal-footer">
+          <button
+            class="btn btn-secondary"
+            onclick="closeModal('attendanceModal')"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Auto-Assign Modal -->
+    <div class="modal-overlay" id="autoAssignModal">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>🔄 Auto-Assign Sectors</h3>
+          <button class="close-btn" onclick="closeModal('autoAssignModal')">
+            ×
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Assignment Type</label>
+            <select id="autoAssignType">
+              <option value="new">Auto-Assign New (only unassigned)</option>
+              <option value="all">Random Assign All (reassign everyone)</option>
+            </select>
+          </div>
+          <div class="confirm-warning">
+            <strong>⚠️ What this will do:</strong>
+            <ul>
+              <li>Fill every leaf sector with at least 1 person</li>
+              <li>
+                Distribute remaining people to sectors with highest minimums
+              </li>
+            </ul>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" id="autoAssignExtra" checked />
+              Also randomly assign remaining librarians after minimums are met
+            </label>
+          </div>
+          <div class="form-group">
+            <label>
+              <input
+                type="checkbox"
+                id="autoAssignMulti"
+                onchange="toggleMultiSelect()"
+              />
+              Allow librarians to work in multiple sectors (if not enough
+              people)
+            </label>
+            <div
+              id="multiSelectContainer"
+              style="display: none; margin-top: 12px"
+            >
+              <p
+                style="
+                  font-size: 13px;
+                  color: var(--text-secondary);
+                  margin-bottom: 8px;
+                "
+              >
+                Select librarians who can be assigned to multiple sectors (leave
+                none selected for random)
+              </p>
+              <table class="auto-assign-table" id="multiSelectTable">
+                <thead>
+                  <tr>
+                    <th>Select</th>
+                    <th>Name</th>
+                    <th>Adm No.</th>
+                    <th>House</th>
+                  </tr>
+                </thead>
+                <tbody id="multiSelectList"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button
+            class="btn btn-secondary"
+            onclick="closeModal('autoAssignModal')"
+          >
+            Cancel
+          </button>
+          <button class="btn btn-primary" onclick="runAutoAssign()">
+            Run Assignment
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Revert Modal -->
+    <div class="modal-overlay" id="revertModal">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>↩️ Revert Sector Assignment</h3>
+          <button class="close-btn" onclick="closeModal('revertModal')">
+            ×
+          </button>
+        </div>
+        <div class="modal-body">
+          <p>Select a previous assignment to restore.</p>
+          <div id="revertList"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('revertModal')">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hall of Fame Captain Modal -->
+    <div class="modal-overlay" id="hallCaptainModal">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>🏆 Add Library Captain</h3>
+          <button class="close-btn" onclick="closeModal('hallCaptainModal')">
+            ×
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Name</label
+            ><input type="text" id="captainName" placeholder="Full name" />
+          </div>
+          <div class="form-group">
+            <label>Admission Number</label
+            ><input type="text" id="captainAdm" placeholder="e.g., 2024001" />
+          </div>
+          <div class="form-group">
+            <label>Year</label
+            ><input type="number" id="captainYear" placeholder="e.g., 2025" />
+          </div>
+          <div class="form-group">
+            <label>House (optional)</label
+            ><input type="text" id="captainHouse" placeholder="e.g., Sanders" />
+          </div>
+          <div class="form-group">
+            <label>Photo URL (optional)</label
+            ><input
+              type="text"
+              id="captainPhoto"
+              placeholder="https://example.com/photo.jpg"
+            />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button
+            class="btn btn-secondary"
+            onclick="closeModal('hallCaptainModal')"
+          >
+            Cancel
+          </button>
+          <button class="btn btn-primary" onclick="addCaptain()">
+            Add Captain
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Committee Modal (Add Committee Year) -->
+    <div class="modal-overlay" id="committeeModal">
+      <div class="modal fullscreen">
+        <div class="modal-header">
+          <h3>👥 Add Committee</h3>
+          <button class="close-btn" onclick="closeModal('committeeModal')">
+            ×
+          </button>
+        </div>
+        <div class="modal-body">
+          <!-- Step 1: Choose Year -->
+          <div class="form-group" style="max-width: 200px">
+            <label>Year</label>
+            <input
+              type="number"
+              id="committeeYearInput"
+              placeholder="e.g., 2025"
+            />
+          </div>
+
+          <!-- Step 2: Members (table style) -->
+          <div class="form-group">
+            <label>Committee Members</label>
+            <div class="table-scroll">
+              <table class="bulk-table" id="committeeMembersTable">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Adm No.</th>
+                    <th>Class</th>
+                    <th>House</th>
+                    <th>Position</th>
+                    <th>Photo URL</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="committeeMemberInputs">
+                  <!-- Rows will be added dynamically -->
+                  <tr>
+                    <td>
+                      <input
+                        type="text"
+                        class="cm-name"
+                        placeholder="Full name"
+                      />
+                    </td>
+                    <td>
+                      <input type="text" class="cm-adm" placeholder="Adm No." />
+                    </td>
+                    <td>
+                      <input
+                        type="text"
+                        class="cm-class"
+                        placeholder="e.g., 10A"
+                      />
+                    </td>
+                    <td>
+                      <input type="text" class="cm-house" placeholder="House" />
+                    </td>
+                    <td>
+                      <input
+                        type="text"
+                        class="cm-position"
+                        placeholder="Position"
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="text"
+                        class="cm-photo"
+                        placeholder="URL (optional)"
+                      />
+                    </td>
+                    <td>
+                      <button
+                        class="btn btn-danger btn-sm"
+                        onclick="this.closest('tr').remove()"
+                      >
+                        ✕
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <button
+              class="btn btn-secondary btn-sm mt-8"
+              onclick="addCommitteeRow()"
+            >
+              + Add Member
+            </button>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button
+            class="btn btn-secondary"
+            onclick="closeModal('committeeModal')"
+          >
+            Cancel
+          </button>
+          <button class="btn btn-primary" onclick="addCommitteeYear()">
+            Save Committee
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tag Detail Modal -->
+    <div class="modal-overlay" id="tagDetailModal">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>🏷️ Tag Details</h3>
+          <button class="close-btn" onclick="closeModal('tagDetailModal')">
+            ×
+          </button>
+        </div>
+        <div class="modal-body">
+          <div id="tagDetailContent"></div>
+        </div>
+        <div class="modal-footer">
+          <button
+            class="btn btn-secondary"
+            onclick="closeModal('tagDetailModal')"
+          >
+            Close
+          </button>
+          <button class="btn btn-danger" onclick="deleteTagFromModal()">
+            Delete Tag
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tag Add Modal -->
+    <div class="modal-overlay" id="tagModal">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>🏷️ Add Tag</h3>
+          <button class="close-btn" onclick="closeModal('tagModal')">×</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Tag Type</label>
+            <select id="tagTypeSelect">
+              <option value="normal">Normal</option>
+              <option value="punishment">Punishment</option>
+              <option value="praise">Praise</option>
+              <option value="warning">Warning</option>
+              <option value="rep">Representative</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Tag Name</label>
+            <input
+              type="text"
+              id="tagNameInput"
+              placeholder="Custom tag name..."
+            />
+          </div>
+          <div class="tag-templates">
+            <button
+              class="btn btn-secondary btn-sm"
+              onclick="setTagTemplate('Punishment - Late to Duty')"
+            >
+              Late to Duty
+            </button>
+            <button
+              class="btn btn-secondary btn-sm"
+              onclick="setTagTemplate('Punishment - Missed Duty')"
+            >
+              Missed Duty
+            </button>
+            <button
+              class="btn btn-secondary btn-sm"
+              onclick="setTagTemplate('Praise - Excellent Work')"
+            >
+              Excellent Work
+            </button>
+            <button
+              class="btn btn-secondary btn-sm"
+              onclick="setTagTemplate('Junior Librarian Rep')"
+            >
+              Junior Rep
+            </button>
+          </div>
+          <div class="form-group">
+            <label>Description</label>
+            <textarea id="tagDescInput" placeholder="Add details..."></textarea>
+          </div>
+          <div class="form-group">
+            <label>End Date (optional, leave blank for forever)</label>
+            <input type="date" id="tagEndDate" />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('tagModal')">
+            Cancel
+          </button>
+          <button
+            class="btn btn-primary"
+            id="tagModalSaveBtn"
+            onclick="addTagFromModal()"
+          >
+            Add Tag
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tags Popup -->
+    <div class="modal-overlay" id="tagsPopup">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>🏷️ All Tags</h3>
+          <button class="close-btn" onclick="closeModal('tagsPopup')">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="tagsPopupContent"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('tagsPopup')">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Profile Modal (Fullscreen) -->
+    <div class="modal-overlay" id="profileModal">
+      <div class="modal fullscreen">
+        <div class="modal-header">
+          <h3 id="profileTitle">👤 Junior Librarian Profile</h3>
+          <button class="close-btn" onclick="closeModal('profileModal')">
+            ×
+          </button>
+        </div>
+        <div class="modal-body">
+          <div id="profileContent"></div>
+        </div>
+        <div class="modal-footer">
+          <button
+            class="btn btn-secondary"
+            onclick="closeModal('profileModal')"
+          >
+            Close
+          </button>
+          <button class="btn btn-primary" onclick="saveProfile()">
+            💾 Save Changes
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sectors Management Modal (Fullscreen) -->
+    <div class="modal-overlay" id="sectorManagementModal">
+      <div class="modal fullscreen">
+        <div class="modal-header">
+          <h3 id="sectorMgmtTitle">📂 Manage Sectors</h3>
+          <button
+            class="close-btn"
+            onclick="closeModal('sectorManagementModal')"
+          >
+            ×
+          </button>
+        </div>
+        <div class="modal-body">
+          <div id="sectorMgmtContent"></div>
+        </div>
+        <div class="modal-footer">
+          <button
+            class="btn btn-secondary"
+            onclick="closeModal('sectorManagementModal')"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Attendance History Modal (Fullscreen) -->
+    <div class="modal-overlay" id="attendanceHistoryModal">
+      <div class="modal fullscreen">
+        <div class="modal-header">
+          <h3 id="attendanceHistoryTitle">📊 Attendance History</h3>
+          <button
+            class="close-btn"
+            onclick="closeModal('attendanceHistoryModal')"
+          >
+            ×
+          </button>
+        </div>
+        <div class="modal-body">
+          <div id="attendanceHistoryContent"></div>
+        </div>
+        <div class="modal-footer">
+          <button
+            class="btn btn-secondary"
+            onclick="closeModal('attendanceHistoryModal')"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Duty Attendance Modal (Fullscreen) -->
+    <div class="modal-overlay" id="dutyAttendanceModal">
+      <div class="modal fullscreen">
+        <div class="modal-header">
+          <h3 id="dutyAttendanceTitle">📋 Duty Attendance</h3>
+          <button class="close-btn" onclick="closeModal('dutyAttendanceModal')">
+            ×
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="duty-attendance-filters">
+            <label>View:</label>
+            <select id="dutyAttendanceFilter" onchange="renderDutyAttendance()">
+              <option value="today">Today</option>
+              <option value="week">This Week</option>
+              <option value="month">This Month</option>
+              <option value="custom">Custom Range</option>
+            </select>
+            <div id="customDateRange" style="display: none">
+              <input type="date" id="dutyAttendanceStart" />
+              <input type="date" id="dutyAttendanceEnd" />
+              <button
+                class="btn btn-primary btn-sm"
+                onclick="renderDutyAttendance()"
+              >
+                Apply
+              </button>
+            </div>
+          </div>
+          <div id="dutyAttendanceContainer"></div>
+        </div>
+        <div class="modal-footer">
+          <button
+            class="btn btn-secondary"
+            onclick="closeModal('dutyAttendanceModal')"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Action Popup Modal -->
+    <div class="modal-overlay" id="actionPopup">
+      <div class="modal">
+        <div class="modal-header">
+          <h3 id="actionPopupTitle">⚙️ Actions</h3>
+          <button class="close-btn" onclick="closeModal('actionPopup')">
+            ×
+          </button>
+        </div>
+        <div class="modal-body" id="actionPopupContent"></div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('actionPopup')">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Notification Action Modal -->
+    <div class="modal-overlay" id="notificationActionModal">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>🔔 Notification Actions</h3>
+          <button
+            class="close-btn"
+            onclick="closeModal('notificationActionModal')"
+          >
+            ×
+          </button>
+        </div>
+        <div class="modal-body" id="notificationActionContent"></div>
+        <div class="modal-footer">
+          <button
+            class="btn btn-secondary"
+            onclick="closeModal('notificationActionModal')"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Confirm Modal -->
+    <div class="modal-overlay" id="confirmModal">
+      <div class="modal">
+        <div class="modal-header">
+          <h3 id="confirmTitle">Confirm Action</h3>
+          <button class="close-btn" onclick="closeModal('confirmModal')">
+            ×
+          </button>
+        </div>
+        <div class="modal-body">
+          <div id="confirmContent"></div>
+        </div>
+        <div class="modal-footer">
+          <button
+            class="btn btn-secondary"
+            onclick="closeModal('confirmModal')"
+          >
+            Cancel
+          </button>
+          <button
+            class="btn btn-danger"
+            id="confirmButton"
+            onclick="confirmAction()"
+          >
+            Confirm
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Edit Committee Modal -->
+    <div class="modal-overlay" id="editCommitteeModal">
+      <div class="modal fullscreen">
+        <div class="modal-header">
+          <h3>✏️ Edit Committee</h3>
+          <button class="close-btn" onclick="closeModal('editCommitteeModal')">
+            ×
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group" style="max-width: 200px">
+            <label>Year</label>
+            <input
+              type="number"
+              id="editCommitteeYear"
+              placeholder="e.g., 2025"
+            />
+          </div>
+          <div class="form-group">
+            <label>Committee Members</label>
+            <div class="table-scroll">
+              <table class="bulk-table" id="editCommitteeMembersTable">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Adm No.</th>
+                    <th>Class</th>
+                    <th>House</th>
+                    <th>Position</th>
+                    <th>Photo URL</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="editCommitteeMemberInputs">
+                  <!-- Rows will be loaded dynamically -->
+                </tbody>
+              </table>
+            </div>
+            <button
+              class="btn btn-secondary btn-sm mt-8"
+              onclick="addEditCommitteeRow()"
+            >
+              + Add Member
+            </button>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button
+            class="btn btn-secondary"
+            onclick="closeModal('editCommitteeModal')"
+          >
+            Cancel
+          </button>
+          <button class="btn btn-primary" onclick="saveEditCommittee()">
+            Save Changes
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sector Settings Modal (for leaf sector settings) -->
+    <div class="modal-overlay" id="sectorSettingsModal">
+      <div class="modal fullscreen">
+        <div class="modal-header">
+          <h3 id="sectorSettingsTitle">⚙️ Sector Settings</h3>
+          <button class="close-btn" onclick="closeModal('sectorSettingsModal')">
+            ×
+          </button>
+        </div>
+        <div class="modal-body">
+          <div id="sectorSettingsContent"></div>
+        </div>
+        <div class="modal-footer">
+          <button
+            class="btn btn-secondary"
+            onclick="closeModal('sectorSettingsModal')"
+          >
+            Cancel
+          </button>
+          <button class="btn btn-primary" onclick="saveSectorSettings()">
+            Save Settings
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Edit Duty Modal -->
+    <div class="modal-overlay" id="editDutyModal">
+      <div class="modal fullscreen">
+        <div class="modal-header">
+          <h3>✏️ Edit Duty</h3>
+          <button class="close-btn" onclick="closeModal('editDutyModal')">
+            ×
+          </button>
+        </div>
+        <div class="modal-body">
+          <div id="editDutyContent"></div>
+        </div>
+        <div class="modal-footer">
+          <button
+            class="btn btn-secondary"
+            onclick="closeModal('editDutyModal')"
+          >
+            Cancel
+          </button>
+          <button class="btn btn-primary" onclick="saveEditDuty()">
+            Save Changes
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script src="app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+  </body>
+</html>
