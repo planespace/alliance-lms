@@ -27,7 +27,7 @@ let appData = {
   },
 };
 let removingInProgress = false;
-
+let attendanceMarkingInProgress = false;
 let currentManagementLibId = null;
 let simulatedDate = null;
 let currentPage = "dashboard";
@@ -2916,7 +2916,43 @@ async function addNotification(
 }
 
 async function generateMissedNotifications() {
-  // Remove old undismissed missed-duty notifications
+  // Collect currently missed records
+  const missedRecords = appData.attendance.filter((a) => {
+    if (a.attended || a.forgiven || a.punishment_issued) return false;
+    const instance = appData.duty_instances.find(
+      (di) => di.id === a.duty_instance_id
+    );
+    return instance !== undefined;
+  });
+
+  // 1️⃣ Delete ALL cumulative notifications for librarians who currently have missed records
+  if (missedRecords.length > 0) {
+    const libIdsWithMissed = new Set(missedRecords.map((a) => a.librarian_id));
+    const toDelete = appData.notifications.filter(
+      (n) => n.type === "cumulative_all" && libIdsWithMissed.has(n.librarian_id)
+    );
+    // Remove from server
+    for (const n of toDelete) {
+      await deleteEntity("notifications", n.id);
+    }
+    // Remove from local cache
+    appData.notifications = appData.notifications.filter(
+      (n) =>
+        !(n.type === "cumulative_all" && libIdsWithMissed.has(n.librarian_id))
+    );
+  }
+
+  // 2️⃣ Delete any remaining undismissed missed‑duty notifications (old ones)
+  const oldUndismissed = appData.notifications.filter(
+    (n) =>
+      (n.type === "missed_duty" ||
+        n.type === "cumulative_miss" ||
+        n.type === "cumulative_all") &&
+      !n.is_dismissed
+  );
+  for (const n of oldUndismissed) {
+    await deleteEntity("notifications", n.id);
+  }
   appData.notifications = appData.notifications.filter(
     (n) =>
       !(
@@ -2927,16 +2963,13 @@ async function generateMissedNotifications() {
       )
   );
 
-  const missedRecords = appData.attendance.filter((a) => {
-    if (a.attended || a.forgiven || a.punishment_issued) return false;
-    const instance = appData.duty_instances.find(
-      (di) => di.id === a.duty_instance_id
-    );
-    return instance !== undefined;
-  });
+  // 3️⃣ If no missed records, stop
+  if (missedRecords.length === 0) {
+    saveData();
+    return;
+  }
 
-  if (missedRecords.length === 0) return;
-
+  // 4️⃣ Create fresh cumulative notifications for each librarian with misses
   const grouped = {};
   missedRecords.forEach((att) => {
     const libId = att.librarian_id;
@@ -2947,15 +2980,6 @@ async function generateMissedNotifications() {
   for (const [libId, records] of Object.entries(grouped)) {
     const lib = getLib(libId);
     if (!lib) continue;
-
-    const alreadyDismissed = appData.notifications.some(
-      (n) =>
-        n.type === "cumulative_all" &&
-        n.librarian_id === libId &&
-        n.is_dismissed
-    );
-
-    if (alreadyDismissed) continue;
 
     const totalMissed = records.length;
     const daysSet = new Set();
@@ -2992,7 +3016,6 @@ async function generateMissedNotifications() {
 
   saveData();
 }
-
 async function renderNotifications() {
   await generateMissedNotifications();
 
@@ -3142,8 +3165,9 @@ function showNotificationActionPopup(notifId) {
         b.localeCompare(a)
       );
 
+      // ★ Removed the max-height/overflow wrapper – table only with a border
       contentHtml += `
-        <div style="max-height:350px; overflow-y:auto; border:1px solid var(--border); border-radius:8px;">
+        <div style="border:1px solid var(--border); border-radius:8px;">
           <table class="notif-detail-table">
             <thead>
               <tr><th>Date</th><th>Duty</th><th>Time</th><th style="text-align:center;">Action</th></tr>
@@ -3164,9 +3188,9 @@ function showNotificationActionPopup(notifId) {
             duty.end_time
           )}</td>
               <td style="text-align:center;">
-                <button class="btn btn-success btn-sm" onclick="forgiveAttendanceRecord('${
+                <button class="btn btn-success btn-sm" onclick="markAttendedFromNotification('${
                   rec.id
-                }','${notifId}'); showNotificationActionPopup('${notifId}');">✅ Mark Attended</button>
+                }', this)">✅ Mark Attended</button>
               </td>
             </tr>
           `;
@@ -3182,6 +3206,8 @@ function showNotificationActionPopup(notifId) {
       contentHtml += `<div style="text-align:center; padding:20px; color:var(--text-secondary);">✅ All duties have been marked as attended.</div>`;
     }
   } else {
+    // Non‑cumulative notifications – you likely don’t use these, but keep them.
+    // (They already have no inner scroll.)
     const missedRecords = appData.attendance.filter((a) => {
       if (a.librarian_id !== notif.librarian_id) return false;
       if (a.attended || a.forgiven || a.punishment_issued) return false;
@@ -3193,7 +3219,7 @@ function showNotificationActionPopup(notifId) {
 
     if (missedRecords.length > 0) {
       contentHtml += `
-        <div style="max-height:250px; overflow-y:auto; margin-bottom:12px;">
+        <div style="margin-bottom:12px;">
           <table style="width:100%; font-size:13px;">
             <thead><tr><th>Duty</th><th>Time</th><th></th></tr></thead>
             <tbody>
@@ -3210,9 +3236,9 @@ function showNotificationActionPopup(notifId) {
           <tr>
             <td>${duty.name}</td>
             <td>${formatTime(duty.start_time)}-${formatTime(duty.end_time)}</td>
-            <td><button class="btn btn-success btn-sm" onclick="forgiveAttendanceRecord('${
+            <td><button class="btn btn-success btn-sm" onclick="markAttendedFromNotification('${
               rec.id
-            }','${notifId}'); showNotificationActionPopup('${notifId}');">✅ Mark Attended</button></td>
+            }', this)">✅ Mark Attended</button></td>
           </tr>
         `;
       });
@@ -3220,17 +3246,11 @@ function showNotificationActionPopup(notifId) {
     }
   }
 
-  contentHtml += `
-    <div class="action-column">
-      <button class="btn btn-danger" style="width:100%;" onclick="issuePunishmentFromNotification('${notifId}'); closeModal('notificationActionModal');">⚠️ Issue Punishment</button>
-    </div>
-  `;
-
   document.getElementById("notificationActionContent").innerHTML = contentHtml;
   openModal("notificationActionModal");
 }
 
-async function forgiveAttendanceRecord(recordId, notifId) {
+async function forgiveAttendanceRecord(recordId) {
   const rec = appData.attendance.find((a) => a.id === recordId);
   if (!rec) return;
   rec.attended = true;
@@ -3238,9 +3258,6 @@ async function forgiveAttendanceRecord(recordId, notifId) {
   rec.confirmed_at = new Date().toISOString();
   rec.confirmed_by = appData.current_user;
   await saveEntity("attendance", rec, rec.id);
-  renderCurrentPage();
-  renderNotifications();
-  toast("Marked as Attended.");
 }
 
 function issuePunishmentFromNotification(notifId) {
@@ -3915,6 +3932,7 @@ function toast(msg) {
 // ============================================
 async function initApp() {
   await loadData();
+  await generateMissedNotifications();
   await setViewDate(getToday());
 
   const sectorBody = document.querySelector("#sectorModal .modal-body");
@@ -4355,10 +4373,65 @@ async function addSector() {
   toast("Category added.");
 }
 
-async function deleteSector(id) {
+async function deleteSector(id, options = {}) {
   const sec = getSector(id);
   if (!sec) return;
 
+  // -------------------------------------------------------------
+  // Silent deletion (used when a category calls us – no popup)
+  // -------------------------------------------------------------
+  if (options.skipConfirm) {
+    showLoading();
+    try {
+      const clearHistory = options.clearHistory || false;
+      const headers = {};
+      if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+      await fetch(`${API_BASE}/sectors/assignments/by-sector/${id}`, {
+        method: "DELETE",
+        headers,
+      });
+      appData.sector_assignments = appData.sector_assignments.filter(
+        (a) => a.sector_id !== id
+      );
+      const duties = appData.duties.filter((d) => d.sector_id === id);
+      for (const duty of duties) {
+        const instances = appData.duty_instances.filter(
+          (di) => di.duty_id === duty.id
+        );
+        if (clearHistory) {
+          for (const inst of instances) {
+            await deleteEntity("attendance/by-instance", inst.id);
+          }
+          appData.attendance = appData.attendance.filter(
+            (a) => !instances.some((inst) => inst.id === a.duty_instance_id)
+          );
+        }
+        for (const inst of instances) {
+          await deleteEntity("duties/instances", inst.id);
+        }
+        appData.duty_instances = appData.duty_instances.filter(
+          (di) => di.duty_id !== duty.id
+        );
+        await deleteEntity("duties", duty.id);
+        appData.duties = appData.duties.filter((d) => d.id !== duty.id);
+      }
+      await deleteEntity("sectors", id);
+      appData.sectors = appData.sectors.filter((s) => s.id !== id);
+      selectedLeafId = null;
+      renderSectors();
+      updateDutyBadge();
+    } catch (err) {
+      console.error(err);
+      toast("Deletion failed.");
+    } finally {
+      hideLoading();
+    }
+    return;
+  }
+
+  // -------------------------------------------------------------
+  // Normal leaf deletion (user clicked Delete on a leaf sector)
+  // -------------------------------------------------------------
   if (sec.is_leaf) {
     showConfirm(
       "Delete Leaf Sector",
@@ -4414,19 +4487,27 @@ async function deleteSector(id) {
         }
       }
     );
+
+    // -------------------------------------------------------------
+    // Category deletion – one popup for all children
+    // -------------------------------------------------------------
   } else {
-    // Category deletion remains similar
     showConfirm(
       "Delete Category",
-      `<p>Delete <strong>${sec.name}</strong> and all its leaf sectors?</p>`,
+      `<p>Delete <strong>${sec.name}</strong> and all its leaf sectors?</p>
+       <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:14px;">
+         <input type="checkbox" id="deleteCatHistory" />
+         Also permanently delete past attendance records for all leaf sectors inside this category
+       </label>`,
       async () => {
         showLoading();
         try {
+          const clearHistory =
+            document.getElementById("deleteCatHistory")?.checked || false;
           const children = appData.sectors.filter((s) => s.parent_id === id);
           for (const child of children) {
-            // Recursion, but child's deleteSector will itself show loading again.
-            // To avoid nested loading bars, we could suppress, but it's okay for now.
-            await deleteSector(child.id);
+            // Silently delete each leaf, passing the user’s history choice
+            await deleteSector(child.id, { skipConfirm: true, clearHistory });
           }
           await deleteEntity("sectors", id);
           appData.sectors = appData.sectors.filter((s) => s.id !== id);
@@ -4872,17 +4953,47 @@ function renderDuties() {
     .join("");
 }
 
-async function forgiveAttendanceRecord(recordId, notifId) {
-  const rec = appData.attendance.find((a) => a.id === recordId);
-  if (!rec) return;
-  rec.attended = true;
-  rec.forgiven = false;
-  rec.confirmed_at = new Date().toISOString();
-  rec.confirmed_by = appData.current_user;
-  await saveEntity("attendance", rec, rec.id);
-  renderCurrentPage();
-  renderNotifications();
-  toast("Marked as Attended.");
+async function markAttendedFromNotification(recordId, btn) {
+  if (attendanceMarkingInProgress) return;
+  attendanceMarkingInProgress = true;
+
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = "⏳ Saving...";
+  }
+
+  try {
+    // Remember the librarian before the save
+    const attendanceRecord = appData.attendance.find((a) => a.id === recordId);
+    const libId = attendanceRecord ? attendanceRecord.librarian_id : null;
+
+    // 1. Save the attendance
+    await forgiveAttendanceRecord(recordId);
+
+    // 2. Update the notification list (so the main page reflects the change)
+    await generateMissedNotifications();
+    if (currentPage === "notifications") {
+      renderNotifications();
+    } else {
+      updateNotificationBadge();
+    }
+
+    // 3. Rebuild the notification popup directly for this librarian
+    if (libId) {
+      rebuildNotificationPopup(libId);
+    } else {
+      closeModal("notificationActionModal");
+    }
+  } catch (err) {
+    console.error(err);
+    toast("Failed to mark as attended.");
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "✅ Mark Attended";
+    }
+  } finally {
+    attendanceMarkingInProgress = false;
+  }
 }
 
 function showDutyActions(dutyId) {
@@ -5369,6 +5480,85 @@ document.getElementById("showLogin").addEventListener("click", (e) => {
   document.getElementById("showForgot").style.display = "inline";
   document.getElementById("showLogin").style.display = "none";
 });
+
+function rebuildNotificationPopup(libId) {
+  const lib = getLib(libId);
+  if (!lib) {
+    closeModal("notificationActionModal");
+    return;
+  }
+
+  const missedRecords = appData.attendance.filter((a) => {
+    if (a.librarian_id !== libId) return false;
+    if (a.attended || a.forgiven || a.punishment_issued) return false;
+    const instance = appData.duty_instances.find(
+      (di) => di.id === a.duty_instance_id
+    );
+    return instance !== undefined;
+  });
+
+  const content = document.getElementById("notificationActionContent");
+  if (!content) return;
+
+  if (missedRecords.length === 0) {
+    content.innerHTML = `
+      <div style="text-align:center; padding:30px;">
+        <h4 style="color:var(--success);">✅ All duties are now marked as attended.</h4>
+        <p style="margin-top:10px;">Great job!</p>
+        <button class="btn btn-secondary" onclick="closeModal('notificationActionModal')">Close</button>
+      </div>`;
+    return;
+  }
+
+  // Build the table of missed duties (no inner scroll)
+  const grouped = {};
+  missedRecords.forEach((rec) => {
+    const instance = appData.duty_instances.find(
+      (di) => di.id === rec.duty_instance_id
+    );
+    if (!instance) return;
+    const date = instance.date;
+    if (!grouped[date]) grouped[date] = [];
+    grouped[date].push({ rec, instance });
+  });
+
+  const sortedDates = Object.keys(grouped).sort((a, b) => b.localeCompare(a));
+
+  let html = `
+    <div style="margin-bottom:20px;">
+      <h4 style="margin:0 0 4px 0;">⚠️ ${lib.name} has missed duties</h4>
+      <p style="margin:0; font-size:13px; color:var(--text-secondary);">Librarian: ${lib.name}</p>
+    </div>
+    <div style="border:1px solid var(--border); border-radius:8px;">
+      <table class="notif-detail-table">
+        <thead>
+          <tr><th>Date</th><th>Duty</th><th>Time</th><th style="text-align:center;">Action</th></tr>
+        </thead>
+        <tbody>`;
+
+  sortedDates.forEach((date) => {
+    const records = grouped[date];
+    records.forEach(({ rec, instance }, idx) => {
+      const duty = appData.duties.find((d) => d.id === instance.duty_id);
+      if (!duty) return;
+      html += `
+        <tr>
+          <td>${idx === 0 ? formatDateFull(date) : ""}</td>
+          <td><strong>${duty.name}</strong></td>
+          <td>${formatTime(duty.start_time)} – ${formatTime(duty.end_time)}</td>
+          <td style="text-align:center;">
+            <button class="btn btn-success btn-sm" onclick="markAttendedFromNotification('${
+              rec.id
+            }', this)">✅ Mark Attended</button>
+          </td>
+        </tr>`;
+    });
+  });
+
+  html += `</tbody></table></div>`;
+
+  content.innerHTML = html;
+}
 
 // ----- Initial load -----
 // Check for dev mode
