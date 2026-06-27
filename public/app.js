@@ -26,7 +26,9 @@ let appData = {
     cumulativeMissedDutiesThreshold: 3,
   },
 };
+let removingInProgress = false;
 
+let currentManagementLibId = null;
 let simulatedDate = null;
 let currentPage = "dashboard";
 let selectedLibrarianId = null;
@@ -778,6 +780,10 @@ function closeModal(id) {
     if (footer && sectorModalOriginalFooter)
       footer.innerHTML = sectorModalOriginalFooter;
   }
+  // ★ Clear management ID
+  if (id === "sectorManagementModal") {
+    currentManagementLibId = null;
+  }
 }
 document.querySelectorAll(".modal-overlay").forEach((el) => {
   el.addEventListener("click", function (e) {
@@ -902,6 +908,8 @@ function viewSectorManagement(libId) {
       }
     </div>`;
   document.getElementById("sectorMgmtContent").innerHTML = html;
+  // ★ Store the librarian ID for refreshing the modal after removals
+  currentManagementLibId = libId;
   openModal("sectorManagementModal");
 }
 async function addLibrarianToSector(libId) {
@@ -1709,10 +1717,9 @@ function renderQuickSpecificDates() {
 }
 
 async function saveQuickLeaf() {
-  if (saveQuickLeafInProgress) return; // guard
+  if (saveQuickLeafInProgress) return;
   saveQuickLeafInProgress = true;
 
-  // ★ NEW: disable save button and show loading bar
   const saveBtn = document.querySelector(
     "#quickLeafModal .quick-leaf-buttons .btn-primary"
   );
@@ -1819,6 +1826,34 @@ async function saveQuickLeaf() {
     const savedDuty = await saveEntity("duties", newDuty);
     appData.duties.push(savedDuty);
 
+    // ★ CREATE TODAY'S INSTANCE IMMEDIATELY
+    const today = getToday();
+    if (dutyOccursOnDate(newDuty, today)) {
+      const newInst = {
+        duty_id: newDuty.id,
+        date: today,
+        is_active: true,
+        created_at: new Date().toISOString(),
+      };
+      const savedInst = await saveEntity("duties/instances", newInst);
+      appData.duty_instances.push(savedInst);
+      // Add attendance records for people already in the sector (usually none yet, but safe)
+      const sectorPeopleIds = getSectorPeople(savedSector.id).map((p) => p.id);
+      for (const libId of sectorPeopleIds) {
+        const att = {
+          duty_instance_id: savedInst.id,
+          librarian_id: libId,
+          attended: false,
+          confirmed_by: "system",
+          confirmed_at: new Date().toISOString(),
+          forgiven: false,
+          punishment_issued: false,
+        };
+        const savedAtt = await saveEntity("attendance", att);
+        appData.attendance.push(savedAtt);
+      }
+    }
+
     currentSectorPath = [categoryId];
     selectedLeafId = savedSector.id;
     closeModal("quickLeafModal");
@@ -1829,7 +1864,6 @@ async function saveQuickLeaf() {
     toast("Error saving leaf sector.");
   } finally {
     saveQuickLeafInProgress = false;
-    // ★ Re-enable button and hide loading bar
     if (saveBtn) {
       saveBtn.disabled = false;
       saveBtn.textContent = "💾 Save Leaf Sector";
@@ -2360,7 +2394,6 @@ async function saveEditDuty() {
   }
 
   // If the duty is linked to a sector, we don't block the edit – just leave the lib list empty.
-  // The duty will auto‑generate instances from the sector's current members later.
   if (!duty.sector_id) {
     const selectedLibs = [];
     document
@@ -2378,7 +2411,6 @@ async function saveEditDuty() {
     async () => {
       showLoading();
       try {
-        // Update duty properties
         duty.name = name;
         duty.start_time = start;
         duty.end_time = end;
@@ -2408,12 +2440,10 @@ async function saveEditDuty() {
           return inst !== undefined;
         });
 
-        // Save the updated duty
         await saveEntity("duties", duty, duty.id);
 
-        // Success
         closeModal("editDutyModal");
-        renderCurrentPage();
+        renderCurrentPage(); // ← was renderDuties() before; now updates everything
         updateDutyBadge();
         toast(
           "Duty updated – future instances will be recreated when those days arrive."
@@ -2531,10 +2561,7 @@ async function deleteDuty(dutyId) {
             (di) => di.duty_id !== dutyId
           );
         } else {
-          // Keep past instances and their attendance, delete only future ones
-          const pastInsts = allInstances.filter(
-            (inst) => inst.date < getToday()
-          );
+          // Keep past instances, delete only future ones
           const futureInsts = allInstances.filter(
             (inst) => inst.date >= getToday()
           );
@@ -2547,7 +2574,7 @@ async function deleteDuty(dutyId) {
             (a) => !futureInsts.some((inst) => inst.id === a.duty_instance_id)
           );
 
-          // Delete future instances
+          // Delete future instances from DB
           for (const inst of futureInsts) {
             await deleteEntity("duties/instances", inst.id);
           }
@@ -2567,7 +2594,7 @@ async function deleteDuty(dutyId) {
         }
 
         saveData();
-        // ★ Re‑render current page (updates dashboard, duties, attendance, etc.)
+        // ★ Re‑render the current page (updates dashboard, duties, attendance, etc.)
         renderCurrentPage();
         updateDutyBadge();
         toast(
@@ -4412,50 +4439,224 @@ async function deleteSector(id) {
 }
 
 async function removeFromSector(sectorId, libId) {
+  if (removingInProgress) return;
+  removingInProgress = true;
   showLoading();
-  try {
-    const headers = {};
-    if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
-    await fetch(`${API_BASE}/sectors/assignments/${sectorId}/${libId}`, {
-      method: "DELETE",
-      headers,
-    });
-    appData.sector_assignments = appData.sector_assignments.filter(
-      (a) => !(a.sector_id === sectorId && a.librarian_id === libId)
-    );
 
-    await syncDutyInstancesForSector(sectorId);
-
-    renderSectors();
-    toast("Removed.");
-  } catch (err) {
-    console.error(err);
-    toast("Removal failed.");
-  } finally {
+  const lib = getLib(libId);
+  const sec = getSector(sectorId);
+  if (!lib || !sec) {
+    removingInProgress = false;
     hideLoading();
-  }
-}
-
-async function removeAllFromSector(secId) {
-  const people = getSectorPeople(secId);
-  if (!people.length) {
-    toast("No people to remove.");
     return;
   }
-  showConfirm("Remove All", `Remove all ${people.length} people?`, async () => {
-    // Delete all assignments for that sector
-    await deleteEntity("sectors/assignments/by-sector", secId); // custom route needed
-    appData.sector_assignments = appData.sector_assignments.filter(
-      (a) => a.sector_id !== secId
-    );
 
-    await syncDutyInstancesForSector(secId);
+  // Confirmation popup with history option
+  Swal.fire({
+    title: "Remove from Sector",
+    html: `
+      <p>Remove <strong>${lib.name}</strong> from <strong>${sec.name}</strong>?</p>
+      <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:14px;">
+        <input type="checkbox" id="removeHistoryCheck" />
+        Also permanently delete their past attendance records for this sector
+      </label>
+    `,
+    icon: "question",
+    showCancelButton: true,
+    confirmButtonText: "Remove",
+    cancelButtonText: "Cancel",
+    reverseButtons: true,
+    preConfirm: () => {
+      return {
+        clearHistory: document.getElementById("removeHistoryCheck").checked,
+      };
+    },
+  }).then(async (result) => {
+    if (!result.isConfirmed) {
+      removingInProgress = false;
+      hideLoading();
+      return;
+    }
 
-    renderSectors();
-    toast("All removed.");
+    const { clearHistory } = result.value;
+
+    try {
+      // 1. Remove assignment
+      const headers = {};
+      if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+      await fetch(`${API_BASE}/sectors/assignments/${sectorId}/${libId}`, {
+        method: "DELETE",
+        headers,
+      });
+      appData.sector_assignments = appData.sector_assignments.filter(
+        (a) => !(a.sector_id === sectorId && a.librarian_id === libId)
+      );
+
+      // 2. Handle attendance for this librarian in this sector's duties
+      const duties = appData.duties.filter((d) => d.sector_id === sectorId);
+      for (const duty of duties) {
+        const instances = appData.duty_instances.filter(
+          (di) => di.duty_id === duty.id
+        );
+
+        const attToDelete = appData.attendance.filter(
+          (a) =>
+            a.librarian_id === libId &&
+            instances.some((inst) => inst.id === a.duty_instance_id)
+        );
+
+        if (!clearHistory) {
+          // Only delete future attendance (today + future)
+          const futureAtt = attToDelete.filter((att) => {
+            const inst = instances.find((i) => i.id === att.duty_instance_id);
+            return inst && inst.date >= getToday();
+          });
+          for (const att of futureAtt) {
+            await deleteEntity("attendance", att.id);
+          }
+          appData.attendance = appData.attendance.filter(
+            (a) => !futureAtt.some((fa) => fa.id === a.id)
+          );
+        } else {
+          // Delete all attendance for this librarian in this sector
+          for (const att of attToDelete) {
+            await deleteEntity("attendance", att.id);
+          }
+          appData.attendance = appData.attendance.filter(
+            (a) => !attToDelete.some((fa) => fa.id === a.id)
+          );
+        }
+      }
+
+      // 3. Sync remaining (adds missing people, no removal)
+      await syncDutyInstancesForSector(sectorId);
+
+      // 4. Refresh UI – sectors page and Manage Sectors modal if open
+      renderCurrentPage();
+
+      const mgmtModal = document.getElementById("sectorManagementModal");
+      if (mgmtModal && mgmtModal.classList.contains("active")) {
+        // Refresh the modal content using the stored librarian ID
+        if (currentManagementLibId) {
+          viewSectorManagement(currentManagementLibId);
+        }
+      }
+
+      toast("Removed.");
+    } catch (err) {
+      console.error(err);
+      toast("Removal failed.");
+    } finally {
+      removingInProgress = false;
+      hideLoading();
+    }
   });
 }
 
+async function removeAllFromSector(secId) {
+  if (removingInProgress) return;
+  removingInProgress = true;
+
+  const people = getSectorPeople(secId);
+  if (!people.length) {
+    removingInProgress = false;
+    toast("No people to remove.");
+    return;
+  }
+
+  const sec = getSector(secId);
+  if (!sec) {
+    removingInProgress = false;
+    return;
+  }
+
+  Swal.fire({
+    title: "Remove All",
+    html: `
+      <p>Remove all <strong>${people.length}</strong> junior librarians from <strong>${sec.name}</strong>?</p>
+      <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:14px;">
+        <input type="checkbox" id="removeAllHistoryCheck" />
+        Also permanently delete their past attendance records for this sector
+      </label>
+    `,
+    icon: "question",
+    showCancelButton: true,
+    confirmButtonText: "Remove All",
+    cancelButtonText: "Cancel",
+    reverseButtons: true,
+    preConfirm: () => {
+      return {
+        clearHistory: document.getElementById("removeAllHistoryCheck").checked,
+      };
+    },
+  }).then(async (result) => {
+    if (!result.isConfirmed) {
+      removingInProgress = false;
+      return;
+    }
+
+    showLoading();
+    const { clearHistory } = result.value;
+
+    try {
+      // Delete all assignments for this sector
+      const headers = {};
+      if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+      await fetch(`${API_BASE}/sectors/assignments/by-sector/${secId}`, {
+        method: "DELETE",
+        headers,
+      });
+      appData.sector_assignments = appData.sector_assignments.filter(
+        (a) => a.sector_id !== secId
+      );
+
+      // Clean up attendance for all removed people
+      const duties = appData.duties.filter((d) => d.sector_id === secId);
+      for (const duty of duties) {
+        const instances = appData.duty_instances.filter(
+          (di) => di.duty_id === duty.id
+        );
+
+        const libIds = people.map((p) => p.id);
+        const attToDelete = appData.attendance.filter(
+          (a) =>
+            libIds.includes(a.librarian_id) &&
+            instances.some((inst) => inst.id === a.duty_instance_id)
+        );
+
+        if (!clearHistory) {
+          const futureAtt = attToDelete.filter((att) => {
+            const inst = instances.find((i) => i.id === att.duty_instance_id);
+            return inst && inst.date >= getToday();
+          });
+          for (const att of futureAtt) {
+            await deleteEntity("attendance", att.id);
+          }
+          appData.attendance = appData.attendance.filter(
+            (a) => !futureAtt.some((fa) => fa.id === a.id)
+          );
+        } else {
+          for (const att of attToDelete) {
+            await deleteEntity("attendance", att.id);
+          }
+          appData.attendance = appData.attendance.filter(
+            (a) => !attToDelete.some((fa) => fa.id === a.id)
+          );
+        }
+      }
+
+      await syncDutyInstancesForSector(secId);
+      renderCurrentPage();
+      toast("All removed.");
+    } catch (err) {
+      console.error(err);
+      toast("Removal failed.");
+    } finally {
+      removingInProgress = false;
+      hideLoading();
+    }
+  });
+}
 function openAddPeopleModal(secId) {
   const sector = getSector(secId);
   if (!sector) return;
