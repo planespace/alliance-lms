@@ -520,6 +520,23 @@
                 <p><strong>Email:</strong> <span id="profileEmail"></span></p>
               </div>
 
+              <!-- Change Username -->
+              <h3>Change Username</h3>
+              <form onsubmit="return false;">
+                <div class="form-group">
+                  <label>New Username</label>
+                  <input type="text" id="newProfileUsername" />
+                </div>
+                <div class="form-group">
+                  <label>Current Password (to confirm)</label>
+                  <input type="password" id="usernameCurrentPassword" />
+                </div>
+                <button class="btn btn-primary" onclick="changeUsername()">
+                  Update Username
+                </button>
+                <div id="usernameMsg" style="margin-top: 10px"></div>
+              </form>
+
               <!-- Change Email -->
               <h3>Change Email</h3>
               <form onsubmit="return false;">

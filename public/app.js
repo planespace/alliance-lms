@@ -484,8 +484,12 @@ async function handleResetPassword() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
-    successDiv.textContent = data.message + " You can now login.";
+    successDiv.textContent = data.message + " Redirecting to login...";
     successDiv.style.display = "block";
+    // Redirect to login page after 2 seconds
+    setTimeout(() => {
+      window.location.href = window.location.pathname; // reload without query string
+    }, 2000);
   } catch (err) {
     errorDiv.textContent = err.message;
     errorDiv.style.display = "block";

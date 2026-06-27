@@ -1,3 +1,4 @@
+// routes/auth.js
 const express = require("express");
 const router = express.Router();
 const jwt = require("jsonwebtoken");
@@ -123,6 +124,33 @@ router.put("/change-email", protect, async (req, res) => {
     user.email = newEmail;
     await user.save();
     res.json({ message: "Email updated", email: user.email });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- CHANGE USERNAME (protected) ---
+router.put("/change-username", protect, async (req, res) => {
+  try {
+    const { currentPassword, newUsername } = req.body;
+    if (!currentPassword || !newUsername) {
+      return res
+        .status(400)
+        .json({ error: "Current password and new username are required" });
+    }
+    const user = await User.findById(req.user._id);
+    const isMatch = await user.comparePassword(currentPassword);
+    if (!isMatch) {
+      return res.status(401).json({ error: "Current password is incorrect" });
+    }
+    // Check if username already taken
+    const existing = await User.findOne({ username: newUsername });
+    if (existing && existing._id.toString() !== user._id.toString()) {
+      return res.status(400).json({ error: "Username already in use" });
+    }
+    user.username = newUsername;
+    await user.save();
+    res.json({ message: "Username updated", username: user.username });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
