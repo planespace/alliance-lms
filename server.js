@@ -53,6 +53,8 @@ app.use("/api/tags", tagsRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/halloffame", halloffameRouter);
 
+app.get("/ping", (req, res) => res.send("ok"));
+
 // Serve frontend for any other route (SPA fallback)
 app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
