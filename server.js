@@ -21,9 +21,11 @@ const notificationsRouter = require("./routes/notifications");
 const halloffameRouter = require("./routes/halloffame");
 
 const app = express();
+const compression = require("compression");
 
 // Middleware
 app.use(cors());
+app.use(compression());
 app.use(express.json());
 
 // Serve static files (frontend)

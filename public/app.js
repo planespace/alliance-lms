@@ -34,6 +34,7 @@ let currentPage = "dashboard";
 let selectedLibrarianId = null;
 let selectedTagId = null;
 let saveQuickLeafInProgress = false;
+let searchTimer;
 let confirmCallback = null;
 let showDismissed = false;
 let currentViewDate = new Date().toISOString().split("T")[0];
@@ -981,6 +982,12 @@ function renderDashboard() {
   document.getElementById("dutyBadge").textContent = todayDuties.length;
   renderDashboardTable();
 }
+
+function debounceRenderDashboard() {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(renderDashboardTable, 200);
+}
+
 function renderDashboardTable() {
   const tbody = document.getElementById("dashboardTableBody");
   if (!tbody) return;

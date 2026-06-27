@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Alliance Library Management System</title>
     <link rel="icon" type="image/jpeg" href="images/Alliance-LMS.jpg" />
-    <link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="styles.css" />
   </head>
   <body>
 
@@ -282,7 +282,7 @@
                     type="text"
                     id="dashboardSearch"
                     placeholder="Search..."
-                    oninput="renderDashboardTable()"
+                  oninput="debounceRenderDashboard()"
                   />
 
                   <select id="dashboardSort" onchange="renderDashboardTable()">
