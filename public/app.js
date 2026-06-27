@@ -115,7 +115,6 @@ async function bulkAddLibrarians() {
       continue;
     }
     const newLib = {
-      id: genId(),
       name,
       grade,
       adm_no: adm,
@@ -242,112 +241,6 @@ function getAttendancePct(libId) {
 // ============================================
 // DUTY INSTANCE GENERATION
 // ============================================
-function generateDutyInstancesForDate(date) {
-  // 🔒 Prevent any generation for past dates
-  if (date < getToday()) return;
-
-  appData.duties.forEach((duty) => {
-    const dutyCreatedDate = duty.created_at.split("T")[0];
-    if (date < dutyCreatedDate) return;
-    const dayName = new Date(date).toLocaleDateString("en-US", {
-      weekday: "long",
-    });
-    let occurs = false;
-    if (duty.recurrence_type === "specific") {
-      occurs = (duty.specific_dates || []).includes(date);
-    } else if (duty.recurrence_type === "biweekly") {
-      if (duty.days.includes(dayName)) {
-        const creationDate = new Date(duty.created_at);
-        const currentDate = new Date(date);
-        const firstOccurrence = new Date(creationDate);
-        while (
-          firstOccurrence.toLocaleDateString("en-US", { weekday: "long" }) !==
-          dayName
-        ) {
-          firstOccurrence.setDate(firstOccurrence.getDate() + 1);
-        }
-        const diffDays = Math.floor((currentDate - firstOccurrence) / 86400000);
-        if (
-          diffDays >= 0 &&
-          diffDays % ((duty.recurrence_interval + 1) * 7) === 0
-        ) {
-          occurs = true;
-        }
-      }
-    } else {
-      if (duty.days.includes(dayName)) occurs = true;
-    }
-    if (occurs && duty.end_date && date > duty.end_date) occurs = false;
-    if (
-      occurs &&
-      !appData.duty_instances.some(
-        (di) => di.duty_id === duty.id && di.date === date
-      )
-    ) {
-      const instId = genId();
-      appData.duty_instances.push({
-        id: instId,
-        duty_id: duty.id,
-        date,
-        is_active: true,
-        created_at: new Date().toISOString(),
-      });
-
-      const template = appData.duty_instances.find(
-        (di) => di.duty_id === duty.id && di.id !== instId
-      );
-      if (template) {
-        const templateRecords = appData.attendance.filter(
-          (a) => a.duty_instance_id === template.id
-        );
-        templateRecords.forEach((tr) => {
-          const newAtt = {
-            id: genId(),
-            duty_instance_id: instId,
-            librarian_id: tr.librarian_id,
-            attended: false,
-            confirmed_by: "system",
-            confirmed_at: new Date().toISOString(),
-            forgiven: false,
-            punishment_issued: false,
-            notes: null,
-          };
-          appData.attendance.push(newAtt);
-          // Sync to server
-          saveEntity("attendance", newAtt).catch((err) => console.error(err));
-        });
-      } else {
-        if (duty.sector_id) {
-          const sectorPeople = getSectorPeople(duty.sector_id);
-          sectorPeople.forEach((p) => {
-            const newAtt = {
-              id: genId(),
-              duty_instance_id: instId,
-              librarian_id: p.id,
-              attended: false,
-              confirmed_by: "system",
-              confirmed_at: new Date().toISOString(),
-              forgiven: false,
-              punishment_issued: false,
-              notes: null,
-            };
-            appData.attendance.push(newAtt);
-            // Sync to server
-            saveEntity("attendance", newAtt).catch((err) => console.error(err));
-          });
-        }
-      }
-
-      // Sync the new duty instance to the server
-      saveEntity("duties/instances", {
-        id: instId,
-        duty_id: duty.id,
-        date,
-        is_active: true,
-      }).catch((err) => console.error(err));
-    }
-  });
-}
 
 // ============================================
 // FORMATTING
@@ -622,7 +515,6 @@ function showConfirm(title, content, callback) {
   });
 }
 // replace the old confirmAction – no longer needed
-function confirmAction() {} // noop
 
 // ============================================
 // GLOBAL DATE NAVIGATOR
@@ -896,7 +788,6 @@ async function addLibrarian() {
     return;
   }
   const newLib = {
-    id: genId(),
     name,
     grade,
     adm_no: adm,
@@ -1085,7 +976,6 @@ async function addCaptain() {
     window._editingCaptainId = null;
   } else {
     const newCaptain = {
-      id: genId(),
       name,
       adm_no: adm,
       year,
@@ -1242,7 +1132,6 @@ async function addTagFromModal() {
     selectedTagId = null;
   } else {
     const newTag = {
-      id: genId(),
       name,
       description: desc || "No description",
       type,
@@ -1285,7 +1174,6 @@ async function deleteTagFromModal() {
       tag.removed_at = new Date().toISOString();
       await saveEntity("tags", tag, tag.id);
       appData.tag_history.push({
-        id: genId(),
         tag_id: tag.id,
         librarian_id: tag.librarian_id,
         tag_name: tag.name,
@@ -1588,7 +1476,6 @@ async function saveLeafWizard() {
     recurrence === "specific" ? [...wizardSpecificDatesList] : null;
 
   const newSector = {
-    id: genId(),
     name: window._wizardName,
     parent_id: window._wizardCategoryId,
     leader_ids: [],
@@ -1612,7 +1499,6 @@ async function saveLeafWizard() {
   };
 
   const newDuty = {
-    id: genId(),
     name: dutyName,
     start_time: start,
     end_time: end,
@@ -2423,7 +2309,6 @@ async function toggleAttendanceStatus(recId) {
 // ============================================
 function addNotification(msg, type, libId) {
   const newNotif = {
-    id: genId(),
     message: msg,
     type,
     librarian_id: libId,
@@ -2490,7 +2375,6 @@ function generateMissedNotifications() {
     const distinctDays = daysSet.size;
 
     const newNotif = {
-      id: genId(),
       message: `⚠️ ${lib.name} missed ${totalMissed} duties across ${distinctDays} day(s)`,
       type: "cumulative_all",
       librarian_id: libId,
@@ -2816,7 +2700,6 @@ async function runAutoAssign() {
     (s) => (snapshot[s.id] = getSectorPeople(s.id).map((p) => p.id))
   );
   appData.sector_assignment_history.push({
-    id: genId(),
     assignment_snapshot: snapshot,
     timestamp: new Date().toISOString(),
     created_by: appData.current_user,
@@ -3094,7 +2977,6 @@ async function addCommitteeYear() {
   }
 
   const newCommittee = {
-    id: genId(),
     year,
     members,
     created_at: new Date().toISOString(),
@@ -3337,10 +3219,14 @@ async function initApp() {
 
   document.getElementById("viewDate").max = getToday();
   renderDashboard();
-  setInterval(() => {
-    if (currentPage === "notifications") renderNotifications();
-    generateDutyInstancesForDate(getToday());
-    cleanExpiredTags();
+  setInterval(async () => {
+    try {
+      if (currentPage === "notifications") renderNotifications();
+      await generateDutyInstancesForDate(getToday());
+      await cleanExpiredTags();
+    } catch (e) {
+      console.error(e);
+    }
   }, 60000);
   setInterval(updateNotificationBadge, 15000);
 }
@@ -3648,7 +3534,6 @@ function quickDeleteTag(tagId) {
   tag.removed_at = new Date().toISOString();
   saveEntity("tags", tag, tag.id);
   appData.tag_history.push({
-    id: genId(),
     tag_id: tag.id,
     librarian_id: tag.librarian_id,
     tag_name: tag.name,
@@ -3708,6 +3593,777 @@ function populateMultiSelect() {
   });
   container.innerHTML = html;
 }
+
+async function addSector() {
+  const name = document.getElementById("sectorName").value.trim();
+  const desc = document.getElementById("sectorDesc").value.trim();
+  if (!name) {
+    Swal.fire("Error", "Enter a name.", "error");
+    return;
+  }
+  // Categories only – isLeaf is forced false in the modal
+  const newCategory = {
+    name,
+    parent_id: null,
+    is_leaf: false,
+    description: desc || null,
+    min_people: 0,
+    created_at: new Date().toISOString(),
+  };
+  const saved = await saveEntity("sectors", newCategory);
+  appData.sectors.push(saved);
+  closeModal("sectorModal");
+  renderSectors();
+  toast("Category added.");
+}
+
+async function deleteSector(id) {
+  const sec = getSector(id);
+  if (!sec) return;
+
+  if (sec.is_leaf) {
+    // Leaf sector
+    showConfirm(
+      "Delete Leaf Sector",
+      `<p>Delete <strong>${sec.name}</strong>?</p>
+       <label><input type="checkbox" id="deleteLeafHistory"> Also delete attendance history</label>`,
+      async () => {
+        const clearHistory =
+          document.getElementById("deleteLeafHistory")?.checked || false;
+        // Remove assignments
+        appData.sector_assignments = appData.sector_assignments.filter(
+          (a) => a.sector_id !== id
+        );
+        // Find and delete duties linked to this sector
+        const duties = appData.duties.filter((d) => d.sector_id === id);
+        for (const duty of duties) {
+          const instances = appData.duty_instances.filter(
+            (di) => di.duty_id === duty.id
+          );
+          if (clearHistory) {
+            for (const inst of instances) {
+              await deleteEntity("attendance/by-instance", inst.id);
+            }
+            appData.attendance = appData.attendance.filter(
+              (a) => !instances.some((inst) => inst.id === a.duty_instance_id)
+            );
+          }
+          for (const inst of instances) {
+            await deleteEntity("duties/instances", inst.id);
+          }
+          appData.duty_instances = appData.duty_instances.filter(
+            (di) => di.duty_id !== duty.id
+          );
+          await deleteEntity("duties", duty.id);
+          appData.duties = appData.duties.filter((d) => d.id !== duty.id);
+        }
+        // Delete sector
+        await deleteEntity("sectors", id);
+        appData.sectors = appData.sectors.filter((s) => s.id !== id);
+        selectedLeafId = null;
+        renderSectors();
+        toast("Leaf sector deleted.");
+      }
+    );
+  } else {
+    // Category – recursively delete leaf children
+    showConfirm(
+      "Delete Category",
+      `<p>Delete <strong>${sec.name}</strong> and all its leaf sectors?</p>`,
+      async () => {
+        const children = appData.sectors.filter((s) => s.parent_id === id);
+        for (const child of children) {
+          await deleteSector(child.id); // recursion – will handle each leaf
+        }
+        await deleteEntity("sectors", id);
+        appData.sectors = appData.sectors.filter((s) => s.id !== id);
+        currentSectorPath = [];
+        selectedLeafId = null;
+        renderSectors();
+        toast("Category deleted.");
+      }
+    );
+  }
+}
+
+async function removeFromSector(sectorId, libId) {
+  // Call the API to delete the assignment (the route exists: DELETE /api/sectors/assignments/:sectorId/:libId)
+  await fetch(`${API_BASE}/sectors/assignments/${sectorId}/${libId}`, {
+    method: "DELETE",
+  });
+  appData.sector_assignments = appData.sector_assignments.filter(
+    (a) => !(a.sector_id === sectorId && a.librarian_id === libId)
+  );
+  renderSectors();
+  toast("Removed.");
+}
+
+async function removeAllFromSector(secId) {
+  const people = getSectorPeople(secId);
+  if (!people.length) {
+    toast("No people to remove.");
+    return;
+  }
+  showConfirm("Remove All", `Remove all ${people.length} people?`, async () => {
+    // Delete all assignments for that sector
+    await deleteEntity("sectors/assignments/by-sector", secId); // custom route needed
+    appData.sector_assignments = appData.sector_assignments.filter(
+      (a) => a.sector_id !== secId
+    );
+    renderSectors();
+    toast("All removed.");
+  });
+}
+
+function openAddPeopleModal(secId) {
+  const sector = getSector(secId);
+  if (!sector) return;
+  const allLibs = appData.librarians.filter((l) => !l.is_deleted);
+  const assignedIds = appData.sector_assignments
+    .filter((a) => a.sector_id === secId)
+    .map((a) => a.librarian_id);
+  let html = `<h4>Add People to ${sector.name}</h4><div style="max-height:300px;overflow-y:auto;">`;
+  allLibs.forEach((l) => {
+    const checked = assignedIds.includes(l.id);
+    html += `<label style="display:flex;align-items:center;gap:6px;padding:4px 10px;background:${
+      checked ? "#dcfce7" : "#f8fafc"
+    }"><input type="checkbox" class="add-people-check" value="${l.id}" ${
+      checked ? "checked" : ""
+    }> ${l.name} (${l.adm_no})</label>`;
+  });
+  html += `</div><button class="btn btn-primary btn-sm" onclick="saveAddPeople('${secId}')">Save</button>`;
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay active";
+  overlay.innerHTML = `<div class="modal"><div class="modal-header"><h3>Add People</h3><button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button></div><div class="modal-body">${html}</div></div>`;
+  document.body.appendChild(overlay);
+}
+
+async function saveAddPeople(secId) {
+  const checks = document.querySelectorAll(".add-people-check");
+  const toAdd = [];
+  const toRemove = [];
+  checks.forEach((cb) => {
+    if (
+      cb.checked &&
+      !appData.sector_assignments.some(
+        (a) => a.sector_id === secId && a.librarian_id === cb.value
+      )
+    ) {
+      toAdd.push(cb.value);
+    } else if (!cb.checked) {
+      toRemove.push(cb.value);
+    }
+  });
+  // Add new assignments
+  for (const libId of toAdd) {
+    const saved = await saveEntity("sectors/assignments", {
+      sector_id: secId,
+      librarian_id: libId,
+      assigned_at: new Date().toISOString(),
+    });
+    appData.sector_assignments.push(saved);
+  }
+  // Remove unchecked
+  for (const libId of toRemove) {
+    await deleteEntity(`sectors/assignments/${secId}/${libId}`, null);
+    appData.sector_assignments = appData.sector_assignments.filter(
+      (a) => !(a.sector_id === secId && a.librarian_id === libId)
+    );
+  }
+  document.querySelectorAll(".modal-overlay.active").forEach((m) => m.remove());
+  renderSectors();
+  toast("People updated.");
+}
+
+function renderDuties() {
+  const filter = document.getElementById("dutyFilter").value;
+  const hasLibrarians = document.getElementById("dutyHasLibrarians").checked;
+  let duties = [...appData.duties];
+  const today = getToday();
+  const weekDates = getWeekDates(); // from your helpers
+
+  if (filter === "today") {
+    duties = duties.filter((d) =>
+      appData.duty_instances.some(
+        (di) => di.duty_id === d.id && di.date === today
+      )
+    );
+  } else if (filter === "week") {
+    duties = duties.filter((d) =>
+      appData.duty_instances.some(
+        (di) => di.duty_id === d.id && weekDates.includes(di.date)
+      )
+    );
+  } else if (filter === "punishment") {
+    duties = duties.filter((d) => d.is_punishment);
+  }
+
+  if (hasLibrarians) {
+    duties = duties.filter((d) => {
+      const hasAttendance = appData.duty_instances
+        .filter((di) => di.duty_id === d.id)
+        .some((di) =>
+          appData.attendance.some((a) => a.duty_instance_id === di.id)
+        );
+      if (hasAttendance) return true;
+      if (d.sector_id) {
+        const sector = getSector(d.sector_id);
+        return sector && getSectorPeople(sector.id).length > 0;
+      }
+      return false;
+    });
+  }
+
+  const container = document.getElementById("dutyContainer");
+  if (!duties.length) {
+    container.innerHTML = '<p class="text-muted">No duties found.</p>';
+    return;
+  }
+
+  if (isCalendarView) {
+    const today = getToday();
+    const [year, month] = today.split("-").slice(0, 2);
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const firstDay = new Date(year, month - 1, 1).getDay();
+    const dutiesForMonth = appData.duty_instances.filter(
+      (di) => di.date.startsWith(`${year}-${month}`) && di.is_active
+    );
+    const dutiesByDate = {};
+    dutiesForMonth.forEach((di) => {
+      const date = di.date;
+      if (!dutiesByDate[date]) dutiesByDate[date] = [];
+      const duty = appData.duties.find((d) => d.id === di.duty_id);
+      if (duty && duties.some((d2) => d2.id === duty.id))
+        dutiesByDate[date].push(duty);
+    });
+    let calHtml = `<div class="calendar-grid">`;
+    ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].forEach(
+      (h) => (calHtml += `<div class="day-header">${h}</div>`)
+    );
+    for (let i = 0; i < firstDay; i++)
+      calHtml += `<div class="day empty"></div>`;
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(
+        d
+      ).padStart(2, "0")}`;
+      const isToday = dateStr === today;
+      const isPast = dateStr < today;
+      calHtml += `<div class="day ${isToday ? "today" : ""} ${
+        isPast ? "past" : ""
+      }"><div class="date-num">${d}</div>`;
+      if (dutiesByDate[dateStr]) {
+        dutiesByDate[dateStr].forEach((duty) => {
+          calHtml += `<div class="duty-item ${
+            duty.is_punishment ? "punishment" : "regular"
+          } ${isPast ? "past" : ""}" onclick="showDutyActions('${duty.id}')">${
+            duty.name
+          }</div>`;
+        });
+      }
+      calHtml += `</div>`;
+    }
+    calHtml += `</div>`;
+    container.innerHTML = calHtml;
+    return;
+  }
+
+  // Card view
+  container.innerHTML = duties
+    .map((d) => {
+      const instances = appData.duty_instances.filter(
+        (di) => di.duty_id === d.id
+      );
+      const total = instances.reduce(
+        (s, di) =>
+          s +
+          appData.attendance.filter((a) => a.duty_instance_id === di.id).length,
+        0
+      );
+      const attended = instances.reduce(
+        (s, di) =>
+          s +
+          appData.attendance.filter(
+            (a) => a.duty_instance_id === di.id && (a.attended || a.forgiven)
+          ).length,
+        0
+      );
+      return `<div class="duty-card ${d.is_punishment ? "punishment" : ""}">
+      <div class="duty-header">
+        <div>
+          <span class="duty-title">${d.name}</span>
+          <span class="duty-meta">${formatTime(d.start_time)}-${formatTime(
+        d.end_time
+      )} · ${d.days.map(getDayName).join(", ")}</span>
+        </div>
+        <div class="duty-actions">
+          <span>${attended}/${total} attended</span>
+          <button class="action-btn" onclick="showDutyActions('${
+            d.id
+          }')">⚙️</button>
+        </div>
+      </div>
+    </div>`;
+    })
+    .join("");
+}
+
+async function forgiveAttendanceRecord(recordId, notifId) {
+  const rec = appData.attendance.find((a) => a.id === recordId);
+  if (!rec) return;
+  rec.attended = true;
+  rec.forgiven = false;
+  rec.confirmed_at = new Date().toISOString();
+  rec.confirmed_by = appData.current_user;
+  await saveEntity("attendance", rec, rec.id);
+  renderCurrentPage();
+  renderNotifications();
+  toast("Marked as Attended.");
+}
+
+function showDutyActions(dutyId) {
+  const duty = appData.duties.find((d) => d.id === dutyId);
+  if (!duty) return;
+  document.getElementById("actionPopupTitle").textContent = `⚙️ ${duty.name}`;
+  document.getElementById("actionPopupContent").innerHTML = `
+    <button class="btn btn-primary" style="width:100%;" onclick="editDuty('${dutyId}');closeModal('actionPopup');">✏️ Edit</button>
+    <button class="btn btn-danger" style="width:100%;" onclick="deleteDuty('${dutyId}');closeModal('actionPopup');">🗑️ Delete</button>`;
+  openModal("actionPopup");
+}
+
+let createDutySectorId = null;
+
+function openCreateDuty(leafSectorId = null) {
+  createDutySectorId = leafSectorId;
+  document.getElementById("dutyName").value = "";
+  document.getElementById("dutyStart").value = "";
+  document.getElementById("dutyEnd").value = "";
+  document.querySelectorAll(".duty-day").forEach((cb) => (cb.checked = false));
+  document.getElementById("dutyEndDate").value = "";
+  document.getElementById("dutyRecurrence").value = "weekly";
+  document.getElementById("dutyIsPunishment").value = "false";
+  specificDatesList = [];
+  document.getElementById("specificDatesList").innerHTML = "";
+  document.getElementById("specificDatesContainer").style.display = "none";
+  document.getElementById("recurrenceExtra").style.display = "none";
+
+  const checkboxContainer = document.getElementById("dutyLibrarianCheckboxes");
+  if (leafSectorId) {
+    checkboxContainer.innerHTML =
+      '<p class="text-muted">📌 Librarians are automatically taken from the leaf sector.</p>';
+  } else {
+    populateDutyLibrarians();
+  }
+  openModal("dutyModal");
+}
+
+function openCreateDutyForSector(secId) {
+  openCreateDuty(secId);
+}
+
+function populateDutyLibrarians() {
+  const container = document.getElementById("dutyLibrarianCheckboxes");
+  const librarians = appData.librarians.filter((l) => !l.is_deleted);
+  let html = `<table><thead><tr><th>Select</th><th>Name</th><th>Grade</th><th>Adm No.</th></tr></thead><tbody>`;
+  librarians.forEach((l) => {
+    html += `<tr><td><input type="checkbox" class="duty-lib-check" value="${l.id}" checked></td><td>${l.name}</td><td>${l.grade}</td><td>${l.adm_no}</td></tr>`;
+  });
+  html += `</tbody></table>`;
+  html += `<div><button class="btn btn-secondary btn-sm" onclick="selectAllDutyLibrarians(true)">Select All</button> <button class="btn btn-secondary btn-sm" onclick="selectAllDutyLibrarians(false)">Clear All</button></div>`;
+  container.innerHTML = html;
+}
+
+function selectAllDutyLibrarians(sel) {
+  document
+    .querySelectorAll(".duty-lib-check")
+    .forEach((cb) => (cb.checked = sel));
+}
+
+async function createDuty() {
+  const name = document.getElementById("dutyName").value.trim();
+  const start = document.getElementById("dutyStart").value;
+  const end = document.getElementById("dutyEnd").value;
+  const recurrence = document.getElementById("dutyRecurrence").value;
+  const isPunishment =
+    document.getElementById("dutyIsPunishment").value === "true";
+  const endDate = document.getElementById("dutyEndDate").value || null;
+  const interval =
+    recurrence === "biweekly"
+      ? parseInt(document.getElementById("recurrenceInterval").value) || 1
+      : null;
+  const days = [];
+  document
+    .querySelectorAll(".duty-day:checked")
+    .forEach((cb) => days.push(cb.value));
+  const specificDates =
+    recurrence === "specific" ? [...specificDatesList] : null;
+
+  if (!name || !start || !end || days.length === 0) {
+    Swal.fire("Error", "Fill all fields and select days.", "error");
+    return;
+  }
+  if (start >= end) {
+    Swal.fire("Error", "End must be after start.", "error");
+    return;
+  }
+
+  let libs = [];
+  if (createDutySectorId) {
+    libs = getSectorPeople(createDutySectorId).map((p) => p.id);
+    if (libs.length === 0) {
+      Swal.fire(
+        "Error",
+        "The leaf sector has no librarians assigned.",
+        "error"
+      );
+      return;
+    }
+  } else {
+    document
+      .querySelectorAll(".duty-lib-check:checked")
+      .forEach((cb) => libs.push(cb.value));
+    if (libs.length === 0) {
+      Swal.fire("Error", "Select at least one librarian.", "error");
+      return;
+    }
+  }
+
+  const newDuty = {
+    name,
+    start_time: start,
+    end_time: end,
+    days,
+    recurrence_type: recurrence,
+    specific_dates: specificDates,
+    recurrence_interval: interval,
+    end_date: endDate,
+    is_punishment: isPunishment,
+    sector_id: createDutySectorId || null,
+    created_by: appData.current_user,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  const savedDuty = await saveEntity("duties", newDuty);
+  appData.duties.push(savedDuty);
+
+  // If sector-linked, update sector's duty_settings_list
+  if (createDutySectorId) {
+    const sector = getSector(createDutySectorId);
+    if (sector) {
+      if (!sector.duty_settings_list) sector.duty_settings_list = [];
+      sector.duty_settings_list.push({
+        name,
+        start_time: start,
+        end_time: end,
+        days,
+        recurrence,
+        recurrence_interval: interval,
+        specific_dates: specificDates,
+        is_punishment: isPunishment,
+        end_date: endDate,
+      });
+      await saveEntity("sectors", sector, sector.id);
+    }
+  }
+
+  // Generate today's instance if it occurs
+  const today = getToday();
+  if (dutyOccursOnDate(savedDuty, today)) {
+    const newInst = {
+      duty_id: savedDuty.id,
+      date: today,
+      is_active: true,
+      created_at: new Date().toISOString(),
+    };
+    const savedInst = await saveEntity("duties/instances", newInst);
+    appData.duty_instances.push(savedInst);
+    for (const libId of libs) {
+      const att = {
+        duty_instance_id: savedInst.id,
+        librarian_id: libId,
+        attended: false,
+        confirmed_by: "system",
+        confirmed_at: new Date().toISOString(),
+        forgiven: false,
+        punishment_issued: false,
+      };
+      const savedAtt = await saveEntity("attendance", att);
+      appData.attendance.push(savedAtt);
+    }
+  }
+
+  closeModal("dutyModal");
+  renderCurrentPage();
+  toast(`Duty "${name}" created.`);
+}
+
+// Helper: check if a duty occurs on a given date (reuse logic from generateDutyInstancesForDate)
+function dutyOccursOnDate(duty, date) {
+  const dutyCreatedDate = duty.created_at.split("T")[0];
+  if (date < dutyCreatedDate) return false;
+  const dayName = new Date(date).toLocaleDateString("en-US", {
+    weekday: "long",
+  });
+  if (duty.recurrence_type === "specific") {
+    return (duty.specific_dates || []).includes(date);
+  } else if (duty.recurrence_type === "biweekly") {
+    if (!duty.days.includes(dayName)) return false;
+    const creationDate = new Date(duty.created_at);
+    const currentDate = new Date(date);
+    const firstOccurrence = new Date(creationDate);
+    while (
+      firstOccurrence.toLocaleDateString("en-US", { weekday: "long" }) !==
+      dayName
+    ) {
+      firstOccurrence.setDate(firstOccurrence.getDate() + 1);
+    }
+    const diffDays = Math.floor((currentDate - firstOccurrence) / 86400000);
+    return (
+      diffDays >= 0 && diffDays % ((duty.recurrence_interval + 1) * 7) === 0
+    );
+  } else {
+    if (!duty.days.includes(dayName)) return false;
+    if (duty.end_date && date > duty.end_date) return false;
+    return true;
+  }
+}
+
+async function generateDutyInstancesForDate(date) {
+  if (date < getToday()) return;
+
+  for (const duty of appData.duties) {
+    const dutyCreatedDate = duty.created_at.split("T")[0];
+    if (date < dutyCreatedDate) continue;
+    const dayName = new Date(date).toLocaleDateString("en-US", {
+      weekday: "long",
+    });
+    let occurs = false;
+    if (duty.recurrence_type === "specific") {
+      occurs = (duty.specific_dates || []).includes(date);
+    } else if (duty.recurrence_type === "biweekly") {
+      if (duty.days.includes(dayName)) {
+        const creationDate = new Date(duty.created_at);
+        const currentDate = new Date(date);
+        const firstOccurrence = new Date(creationDate);
+        while (
+          firstOccurrence.toLocaleDateString("en-US", { weekday: "long" }) !==
+          dayName
+        ) {
+          firstOccurrence.setDate(firstOccurrence.getDate() + 1);
+        }
+        const diffDays = Math.floor((currentDate - firstOccurrence) / 86400000);
+        if (
+          diffDays >= 0 &&
+          diffDays % ((duty.recurrence_interval + 1) * 7) === 0
+        )
+          occurs = true;
+      }
+    } else {
+      if (duty.days.includes(dayName)) occurs = true;
+    }
+    if (occurs && duty.end_date && date > duty.end_date) occurs = false;
+    if (
+      occurs &&
+      !appData.duty_instances.some(
+        (di) => di.duty_id === duty.id && di.date === date
+      )
+    ) {
+      // Save instance without id
+      const newInst = {
+        duty_id: duty.id,
+        date,
+        is_active: true,
+        created_at: new Date().toISOString(),
+      };
+      const savedInst = await saveEntity("duties/instances", newInst);
+      appData.duty_instances.push(savedInst);
+
+      // Determine which librarians to assign
+      let libIds = [];
+      const templateInst = appData.duty_instances.find(
+        (di) => di.duty_id === duty.id && di.id !== savedInst.id
+      );
+      if (templateInst) {
+        const templateRecords = appData.attendance.filter(
+          (a) => a.duty_instance_id === templateInst.id
+        );
+        libIds = templateRecords.map((r) => r.librarian_id);
+      } else if (duty.sector_id) {
+        libIds = getSectorPeople(duty.sector_id).map((p) => p.id);
+      }
+      // Save attendance records for each librarian
+      for (const libId of libIds) {
+        const att = {
+          duty_instance_id: savedInst.id,
+          librarian_id: libId,
+          attended: false,
+          confirmed_by: "system",
+          confirmed_at: new Date().toISOString(),
+          forgiven: false,
+          punishment_issued: false,
+        };
+        const savedAtt = await saveEntity("attendance", att);
+        appData.attendance.push(savedAtt);
+      }
+    }
+  }
+}
+
+function toggleWizardRecurrence() {
+  const rec = document.getElementById("wizardDutyRecurrence").value;
+  document.getElementById("wizardRecurrenceExtra").style.display =
+    rec === "biweekly" ? "block" : "none";
+  document.getElementById("wizardSpecificDatesContainer").style.display =
+    rec === "specific" ? "block" : "none";
+}
+
+function addWizardSpecificDate() {
+  const input = document.getElementById("wizardSpecificDateInput");
+  const date = input.value;
+  if (!date) return;
+  if (wizardSpecificDatesList.includes(date)) {
+    Swal.fire("Error", "Date already added.", "error");
+    return;
+  }
+  wizardSpecificDatesList.push(date);
+  renderWizardSpecificDates();
+  input.value = "";
+}
+
+function removeWizardSpecificDate(date) {
+  wizardSpecificDatesList = wizardSpecificDatesList.filter((d) => d !== date);
+  renderWizardSpecificDates();
+}
+
+function renderWizardSpecificDates() {
+  const container = document.getElementById("wizardSpecificDatesList");
+  if (!container) return;
+  container.innerHTML = wizardSpecificDatesList
+    .map(
+      (d) =>
+        `<span style="display:inline-flex;gap:4px;padding:2px 10px;background:#f8fafc;border-radius:12px;">${formatDate(
+          d
+        )} <span onclick="removeWizardSpecificDate('${d}')" style="cursor:pointer;color:#e53e3e;">×</span></span>`
+    )
+    .join("");
+}
+
+function toggleSectorIsLeaf() {
+  const isLeaf = document.getElementById("sectorIsLeaf").checked;
+  document.getElementById("sectorDutySettings").style.display = isLeaf
+    ? "block"
+    : "none";
+}
+
+function renderLeafContent(secId) {
+  const sector = getSector(secId);
+  if (!sector) return "";
+  const minPeople = sector.min_people || 1;
+  const people = getSectorPeople(secId);
+  const duties = appData.duties.filter((d) => d.sector_id === secId);
+  const isFull = people.length >= minPeople;
+
+  return `
+    <div class="sector-leaf-content">
+      <div class="leaf-content-header">
+        <h3>📄 ${sector.name}</h3>
+        <span class="staffing-badge ${isFull ? "staffed" : "understaffed"}">
+          ${isFull ? "✅" : "⚠️"} ${
+    people.length
+  }/${minPeople} junior librarians
+        </span>
+      </div>
+      ${
+        sector.description
+          ? `<div class="description-text">${sector.description}</div>`
+          : ""
+      }
+      
+      <div style="font-weight:600; font-size:15px; margin-bottom:10px;">📋 Duties</div>
+      ${
+        duties.length
+          ? duties
+              .map(
+                (d) => `
+          <div class="duty-card-compact">
+            <div class="duty-info">
+              <div class="duty-name">${d.name}</div>
+              <div class="duty-meta">${d.days
+                .map(getDayName)
+                .join(", ")} · ${formatTime(d.start_time)}-${formatTime(
+                  d.end_time
+                )}</div>
+            </div>
+            <div class="duty-actions">
+              <button onclick="event.stopPropagation(); editDuty('${
+                d.id
+              }')" title="Edit">✏️</button>
+              <button class="delete-btn" onclick="event.stopPropagation(); deleteDuty('${
+                d.id
+              }')" title="Delete">🗑️</button>
+            </div>
+          </div>`
+              )
+              .join("")
+          : '<div style="color:#f59e0b; font-size:14px;">⚠️ No duties set</div>'
+      }
+      <button class="btn btn-primary btn-sm" onclick="openCreateDutyForSector('${secId}')" style="margin-top:12px;">+ Add Duty</button>
+
+      <div class="people-section">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+          <h4>👤 Junior Librarians (${people.length})</h4>
+          <div>
+            <button class="btn btn-primary btn-sm" onclick="openAddPeopleModal('${secId}')">+ Add</button>
+            <button class="btn btn-danger btn-sm" onclick="removeAllFromSector('${secId}')">✕ Remove All</button>
+          </div>
+        </div>
+        <table class="people-table">
+          <thead><tr><th>Name</th><th>Grade</th><th>Adm No.</th><th>House</th><th>Tags</th><th>Att</th><th></th></tr></thead>
+          <tbody>
+            ${people
+              .map((p) => {
+                const tags = getLibTags(p.id);
+                const pct = getAttendancePct(p.id);
+                return `<tr>
+                <td>${p.name}</td>
+                <td>${p.grade}</td>
+                <td>${p.adm_no}</td>
+                <td>${p.house || "—"}</td>
+                <td>
+                  ${
+                    tags.length === 1
+                      ? `<span class="tag-badge ${tagColor(
+                          tags[0].type
+                        )}" onclick="event.stopPropagation();viewTagDetails('${
+                          tags[0].id
+                        }')">${tags[0].name}</span>`
+                      : tags.length > 1
+                      ? `<span class="tag-badge tags-btn" onclick="event.stopPropagation();showAllTagsPopup('${p.id}')">Tags (${tags.length})</span>`
+                      : "—"
+                  }
+                </td>
+                <td><span class="${
+                  pct === "N/A"
+                    ? "text-muted"
+                    : pct <= 30
+                    ? "text-danger"
+                    : pct <= 60
+                    ? "text-warning"
+                    : "text-success"
+                }">${pct === "N/A" ? "N/A" : pct + "%"}</span></td>
+                <td><button class="btn btn-danger btn-sm" onclick="removeFromSector('${secId}','${
+                  p.id
+                }')">✕</button></td>
+              </tr>`;
+              })
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
 // Auto-login check removed – always show login page
 // This mimics the localStorage version's behaviour where a stored current_user would skip login,
 // but since we now have a real backend, you may implement session later.
