@@ -31,6 +31,7 @@ let simulatedDate = null;
 let currentPage = "dashboard";
 let selectedLibrarianId = null;
 let selectedTagId = null;
+let saveQuickLeafInProgress = false;
 let confirmCallback = null;
 let showDismissed = false;
 let currentViewDate = new Date().toISOString().split("T")[0];
@@ -921,6 +922,9 @@ async function addLibrarianToSector(libId) {
     };
     const saved = await saveEntity("sectors/assignments", newAssignment);
     appData.sector_assignments.push(saved);
+
+    await syncDutyInstancesForSector(secId);
+
     viewSectorManagement(libId);
     renderSectors();
     toast("Added.");
@@ -1508,6 +1512,7 @@ function renderSectors() {
 }
 function renderCategoryCards(categories) {
   const container = document.getElementById("sectorContainer");
+  categories = categories.filter((cat) => typeof cat.name === "string");
   categories.sort((a, b) => a.name.localeCompare(b.name));
   let html = `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
     <h2 style="font-size:20px; color:var(--primary);">📁 Library Categories</h2>
@@ -1704,6 +1709,9 @@ function renderQuickSpecificDates() {
 }
 
 async function saveQuickLeaf() {
+  if (saveQuickLeafInProgress) return; // guard
+  saveQuickLeafInProgress = true;
+
   // ★ NEW: disable save button and show loading bar
   const saveBtn = document.querySelector(
     "#quickLeafModal .quick-leaf-buttons .btn-primary"
@@ -1720,6 +1728,10 @@ async function saveQuickLeaf() {
     const min = parseInt(document.getElementById("quickLeafMin").value);
     const desc = document.getElementById("quickLeafDesc").value.trim();
     const dutyName = document.getElementById("quickDutyName").value.trim();
+    if (!dutyName) {
+      Swal.fire("Error", "Duty name is required.", "error");
+      return;
+    }
     const start = document.getElementById("quickDutyStart").value;
     const end = document.getElementById("quickDutyEnd").value;
     const recurrence = document.getElementById("quickRecurrence").value;
@@ -1764,15 +1776,45 @@ async function saveQuickLeaf() {
       return;
     }
 
-    // (rest of your existing code – creating sector and duty, saving, etc.)
     const newSector = {
-      /* ... unchanged ... */
+      name,
+      parent_id: categoryId,
+      leader_ids: [],
+      min_people: min,
+      is_leaf: true,
+      description: desc || null,
+      duty_settings_list: [
+        {
+          name: dutyName,
+          start_time: start,
+          end_time: end,
+          days,
+          recurrence,
+          recurrence_interval: interval,
+          specific_dates: specificDates,
+          is_punishment: isPunishment,
+          end_date: endDate,
+        },
+      ],
+      created_at: new Date().toISOString(),
     };
     const savedSector = await saveEntity("sectors", newSector);
     appData.sectors.push(savedSector);
 
     const newDuty = {
-      /* ... unchanged ... */
+      name: dutyName,
+      start_time: start,
+      end_time: end,
+      days,
+      recurrence_type: recurrence,
+      specific_dates: specificDates,
+      recurrence_interval: interval,
+      end_date: endDate || null,
+      is_punishment: isPunishment,
+      sector_id: savedSector.id,
+      created_by: appData.current_user,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     };
     const savedDuty = await saveEntity("duties", newDuty);
     appData.duties.push(savedDuty);
@@ -1786,6 +1828,7 @@ async function saveQuickLeaf() {
     console.error(err);
     toast("Error saving leaf sector.");
   } finally {
+    saveQuickLeafInProgress = false;
     // ★ Re-enable button and hide loading bar
     if (saveBtn) {
       saveBtn.disabled = false;
@@ -2316,22 +2359,14 @@ async function saveEditDuty() {
     return;
   }
 
-  let libs = [];
-  if (duty.sector_id) {
-    libs = getSectorPeople(duty.sector_id).map((p) => p.id);
-    if (!libs.length) {
-      Swal.fire(
-        "Error",
-        "This leaf sector has no junior librarians assigned yet.",
-        "error"
-      );
-      return;
-    }
-  } else {
+  // If the duty is linked to a sector, we don't block the edit – just leave the lib list empty.
+  // The duty will auto‑generate instances from the sector's current members later.
+  if (!duty.sector_id) {
+    const selectedLibs = [];
     document
       .querySelectorAll(".edit-duty-lib-check:checked")
-      .forEach((cb) => libs.push(cb.value));
-    if (!libs.length) {
+      .forEach((cb) => selectedLibs.push(cb.value));
+    if (!selectedLibs.length) {
       Swal.fire("Error", "Select at least one librarian.", "error");
       return;
     }
@@ -2341,47 +2376,64 @@ async function saveEditDuty() {
     "⚠️ Confirm Changes",
     `<p>Editing <strong>${duty.name}</strong> will affect <strong>ALL FUTURE instances</strong>. Past instances remain unchanged.</p>`,
     async () => {
-      duty.name = name;
-      duty.start_time = start;
-      duty.end_time = end;
-      duty.days = days;
-      duty.recurrence_type = recurrence;
-      duty.recurrence_interval = interval;
-      duty.specific_dates =
-        recurrence === "specific" ? [...editSpecificDatesList] : null;
-      duty.end_date = endDate;
-      duty.is_punishment = isPunishment;
-      duty.updated_at = new Date().toISOString();
+      showLoading();
+      try {
+        // Update duty properties
+        duty.name = name;
+        duty.start_time = start;
+        duty.end_time = end;
+        duty.days = days;
+        duty.recurrence_type = recurrence;
+        duty.recurrence_interval = interval;
+        duty.specific_dates =
+          recurrence === "specific" ? [...editSpecificDatesList] : null;
+        duty.end_date = endDate;
+        duty.is_punishment = isPunishment;
+        duty.updated_at = new Date().toISOString();
 
-      // Delete all future instances (today and later)
-      const futureInsts = appData.duty_instances.filter(
-        (di) => di.duty_id === duty.id && di.date >= getToday()
-      );
-      for (const inst of futureInsts) {
-        await deleteEntity("duties/instances", inst.id);
-        // attendance records for these instances will be removed on the server (cascade)
-      }
-      appData.duty_instances = appData.duty_instances.filter(
-        (di) => !(di.duty_id === duty.id && di.date >= getToday())
-      );
-      appData.attendance = appData.attendance.filter((a) => {
-        const inst = appData.duty_instances.find(
-          (di) => di.id === a.duty_instance_id
+        // Delete all future instances (today and later)
+        const futureInsts = appData.duty_instances.filter(
+          (di) => di.duty_id === duty.id && di.date >= getToday()
         );
-        return inst !== undefined;
-      });
+        for (const inst of futureInsts) {
+          await deleteEntity("duties/instances", inst.id);
+        }
+        appData.duty_instances = appData.duty_instances.filter(
+          (di) => !(di.duty_id === duty.id && di.date >= getToday())
+        );
+        appData.attendance = appData.attendance.filter((a) => {
+          const inst = appData.duty_instances.find(
+            (di) => di.id === a.duty_instance_id
+          );
+          return inst !== undefined;
+        });
 
-      // Save duty changes
-      await saveEntity("duties", duty, duty.id);
+        // Save the updated duty
+        await saveEntity("duties", duty, duty.id);
 
-      closeModal("editDutyModal");
-      renderDuties();
-      updateDutyBadge();
-      toast(
-        "Duty updated – future instances will be created when those days arrive."
-      );
+        // Success
+        closeModal("editDutyModal");
+        renderCurrentPage();
+        updateDutyBadge();
+        toast(
+          "Duty updated – future instances will be recreated when those days arrive."
+        );
+      } catch (err) {
+        console.error(err);
+        toast("Error saving duty. Please try again.");
+      } finally {
+        hideLoading();
+      }
     }
   );
+}
+
+function toggleRecurrenceOptions() {
+  const rec = document.getElementById("dutyRecurrence").value;
+  document.getElementById("recurrenceExtra").style.display =
+    rec === "biweekly" ? "block" : "none";
+  document.getElementById("specificDatesContainer").style.display =
+    rec === "specific" ? "block" : "none";
 }
 
 // Edit duty helpers (toggle, add/remove specific dates, select all)
@@ -2435,10 +2487,11 @@ async function deleteDuty(dutyId) {
     `<div>
       <p>Are you sure you want to delete <strong>${duty.name}</strong>?</p>
       <div class="confirm-warning">
-        <strong>⚠️ This will affect all librarians assigned to this duty:</strong>
+        <strong>🛑 This will stop the duty from occurring in the future.</strong>
         <ul>
-          <li>All future instances of this duty will be removed.</li>
-          <li>Attendance records for this duty can optionally be deleted.</li>
+          <li><strong>Past</strong> instances (before today) and their attendance will be <strong>kept</strong> so you can still view them.</li>
+          <li>The duty will <strong>no longer appear</strong> on today or upcoming days.</li>
+          <li>If you want to delete everything (including past history), check the box below.</li>
           ${
             duty.is_punishment
               ? "<li>Associated punishment tags will be removed.</li>"
@@ -2448,52 +2501,89 @@ async function deleteDuty(dutyId) {
       </div>
       <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:14px;">
         <input type="checkbox" id="clearDutyHistory" />
-        Also delete all attendance history for this duty
+        Also permanently delete all past attendance records for this duty
       </label>
     </div>`,
     async () => {
-      const clearHistory =
-        document.getElementById("clearDutyHistory")?.checked || false;
-      const instances = appData.duty_instances.filter(
-        (di) => di.duty_id === dutyId
-      );
+      showLoading();
+      try {
+        const clearHistory =
+          document.getElementById("clearDutyHistory")?.checked || false;
 
-      if (clearHistory) {
-        for (const inst of instances) {
-          await deleteEntity("attendance/by-instance", inst.id);
-        }
-        appData.attendance = appData.attendance.filter(
-          (a) => !instances.some((inst) => inst.id === a.duty_instance_id)
+        const allInstances = appData.duty_instances.filter(
+          (di) => di.duty_id === dutyId
         );
+
+        if (clearHistory) {
+          // Delete attendance for EVERY instance (past + future)
+          for (const inst of allInstances) {
+            await deleteEntity("attendance/by-instance", inst.id);
+          }
+          appData.attendance = appData.attendance.filter(
+            (a) => !allInstances.some((inst) => inst.id === a.duty_instance_id)
+          );
+          // Delete all instances
+          for (const inst of allInstances) {
+            await deleteEntity("duties/instances", inst.id);
+          }
+          // Remove all from cache
+          appData.duty_instances = appData.duty_instances.filter(
+            (di) => di.duty_id !== dutyId
+          );
+        } else {
+          // Keep past instances and their attendance, delete only future ones
+          const pastInsts = allInstances.filter(
+            (inst) => inst.date < getToday()
+          );
+          const futureInsts = allInstances.filter(
+            (inst) => inst.date >= getToday()
+          );
+
+          // Delete attendance for future instances only
+          for (const inst of futureInsts) {
+            await deleteEntity("attendance/by-instance", inst.id);
+          }
+          appData.attendance = appData.attendance.filter(
+            (a) => !futureInsts.some((inst) => inst.id === a.duty_instance_id)
+          );
+
+          // Delete future instances
+          for (const inst of futureInsts) {
+            await deleteEntity("duties/instances", inst.id);
+          }
+
+          // ★ Keep past instances in cache – only remove future ones
+          appData.duty_instances = appData.duty_instances.filter(
+            (di) => !(di.duty_id === dutyId && di.date >= getToday())
+          );
+        }
+
+        // Delete the duty itself
+        await deleteEntity("duties", dutyId);
+        appData.duties = appData.duties.filter((d) => d.id !== dutyId);
+
+        if (duty.is_punishment) {
+          appData.tags = appData.tags.filter((t) => t.duty_id !== dutyId);
+        }
+
+        saveData();
+        // ★ Re‑render current page (updates dashboard, duties, attendance, etc.)
+        renderCurrentPage();
+        updateDutyBadge();
+        toast(
+          `Duty "${duty.name}" deleted – future occurrences stopped.${
+            clearHistory ? " All history cleared." : " Past records kept."
+          }`
+        );
+      } catch (err) {
+        console.error(err);
+        toast("Deletion failed.");
+      } finally {
+        hideLoading();
       }
-
-      for (const inst of instances) {
-        await deleteEntity("duties/instances", inst.id);
-      }
-      appData.duty_instances = appData.duty_instances.filter(
-        (di) => di.duty_id !== dutyId
-      );
-
-      await deleteEntity("duties", dutyId);
-      appData.duties = appData.duties.filter((d) => d.id !== dutyId);
-
-      if (duty.is_punishment) {
-        appData.tags = appData.tags.filter((t) => t.duty_id !== dutyId);
-        // optionally delete from server
-      }
-
-      saveData();
-      renderDuties();
-      updateDutyBadge();
-      toast(
-        `Duty "${duty.name}" deleted.${
-          clearHistory ? " Attendance history cleared." : ""
-        }`
-      );
     }
   );
 }
-
 // ============================================
 // ATTENDANCE (past & today only)
 // ============================================
@@ -3258,6 +3348,11 @@ async function runAutoAssign() {
       }
     }
 
+    // ★ Sync duty instances for every leaf sector (adds missing attendance records)
+    for (const s of leafSectors) {
+      await syncDutyInstancesForSector(s.id);
+    }
+
     saveData();
     closeModal("autoAssignModal");
     renderSectors();
@@ -3662,6 +3757,44 @@ function renderCommittee() {
   `
     )
     .join("");
+}
+
+async function syncDutyInstancesForSector(secId) {
+  const duties = appData.duties.filter((d) => d.sector_id === secId);
+  const today = getToday();
+
+  for (const duty of duties) {
+    const instances = appData.duty_instances.filter(
+      (di) => di.duty_id === duty.id && di.date >= today
+    );
+
+    const sectorPeople = getSectorPeople(secId).map((p) => p.id);
+
+    for (const inst of instances) {
+      // Get existing attendance records for this instance
+      const existingLibIds = appData.attendance
+        .filter((a) => a.duty_instance_id === inst.id)
+        .map((a) => a.librarian_id);
+
+      // Find missing librarians
+      const missing = sectorPeople.filter((id) => !existingLibIds.includes(id));
+
+      // Create attendance records for them
+      for (const libId of missing) {
+        const att = {
+          duty_instance_id: inst.id,
+          librarian_id: libId,
+          attended: false,
+          confirmed_by: "system",
+          confirmed_at: new Date().toISOString(),
+          forgiven: false,
+          punishment_issued: false,
+        };
+        const savedAtt = await saveEntity("attendance", att);
+        appData.attendance.push(savedAtt);
+      }
+    }
+  }
 }
 
 function addCommitteeRow() {
@@ -4290,6 +4423,9 @@ async function removeFromSector(sectorId, libId) {
     appData.sector_assignments = appData.sector_assignments.filter(
       (a) => !(a.sector_id === sectorId && a.librarian_id === libId)
     );
+
+    await syncDutyInstancesForSector(sectorId);
+
     renderSectors();
     toast("Removed.");
   } catch (err) {
@@ -4312,6 +4448,9 @@ async function removeAllFromSector(secId) {
     appData.sector_assignments = appData.sector_assignments.filter(
       (a) => a.sector_id !== secId
     );
+
+    await syncDutyInstancesForSector(secId);
+
     renderSectors();
     toast("All removed.");
   });
@@ -4377,6 +4516,9 @@ async function saveAddPeople(secId) {
         (a) => !(a.sector_id === secId && a.librarian_id === libId)
       );
     }
+
+    await syncDutyInstancesForSector(secId);
+
     document
       .querySelectorAll(".modal-overlay.active")
       .forEach((m) => m.remove());
@@ -4725,7 +4867,10 @@ function dutyOccursOnDate(duty, date) {
   } else if (duty.recurrence_type === "biweekly") {
     if (!duty.days.includes(dayName)) return false;
     const creationDate = new Date(duty.created_at);
+    creationDate.setHours(0, 0, 0, 0);
     const currentDate = new Date(date);
+    currentDate.setHours(0, 0, 0, 0);
+
     const firstOccurrence = new Date(creationDate);
     while (
       firstOccurrence.toLocaleDateString("en-US", { weekday: "long" }) !==
@@ -4733,10 +4878,12 @@ function dutyOccursOnDate(duty, date) {
     ) {
       firstOccurrence.setDate(firstOccurrence.getDate() + 1);
     }
-    const diffDays = Math.floor((currentDate - firstOccurrence) / 86400000);
-    return (
-      diffDays >= 0 && diffDays % ((duty.recurrence_interval + 1) * 7) === 0
+
+    const diffDays = Math.floor(
+      (currentDate.getTime() - firstOccurrence.getTime()) / 86400000
     );
+    const intervalWeeks = duty.recurrence_interval || 1;
+    return diffDays >= 0 && diffDays % ((intervalWeeks + 1) * 7) === 0;
   } else {
     if (!duty.days.includes(dayName)) return false;
     if (duty.end_date && date > duty.end_date) return false;
@@ -4758,8 +4905,13 @@ async function generateDutyInstancesForDate(date) {
       occurs = (duty.specific_dates || []).includes(date);
     } else if (duty.recurrence_type === "biweekly") {
       if (duty.days.includes(dayName)) {
+        // Normalise to dates only (no time component)
         const creationDate = new Date(duty.created_at);
+        creationDate.setHours(0, 0, 0, 0);
         const currentDate = new Date(date);
+        currentDate.setHours(0, 0, 0, 0);
+
+        // Find the first occurrence (first matching day on or after creation)
         const firstOccurrence = new Date(creationDate);
         while (
           firstOccurrence.toLocaleDateString("en-US", { weekday: "long" }) !==
@@ -4767,11 +4919,12 @@ async function generateDutyInstancesForDate(date) {
         ) {
           firstOccurrence.setDate(firstOccurrence.getDate() + 1);
         }
-        const diffDays = Math.floor((currentDate - firstOccurrence) / 86400000);
-        if (
-          diffDays >= 0 &&
-          diffDays % ((duty.recurrence_interval + 1) * 7) === 0
-        )
+
+        const diffDays = Math.floor(
+          (currentDate.getTime() - firstOccurrence.getTime()) / 86400000
+        );
+        const intervalWeeks = duty.recurrence_interval || 1; // default 1
+        if (diffDays >= 0 && diffDays % ((intervalWeeks + 1) * 7) === 0)
           occurs = true;
       }
     } else {
