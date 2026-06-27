@@ -420,7 +420,7 @@ function toggleSidebar() {
 // ============================================
 // MODALS & STACKING
 // ============================================
-function openModal(id) {
+async function openModal(id) {
   const modal = document.getElementById(id);
   if (!modal) return;
   modalZIndex += 2;
@@ -463,7 +463,7 @@ function openModal(id) {
 
   if (id === "attendanceModal") {
     document.getElementById("attendanceModalDate").value = getToday();
-    renderAttendanceModal();
+    await renderAttendanceModal();
   }
   if (id === "librarianModal")
     document.getElementById("libJoined").value = getToday();
@@ -519,29 +519,29 @@ function showConfirm(title, content, callback) {
 // ============================================
 // GLOBAL DATE NAVIGATOR
 // ============================================
-function setViewDate(date) {
+async function setViewDate(date) {
   const realToday = new Date().toISOString().split("T")[0];
   simulatedDate = date > realToday ? date : null;
   currentViewDate = date;
   document.getElementById("viewDate").value = date;
   document.getElementById("dateDisplay").textContent = formatDate(date);
-  generateDutyInstancesForDate(date);
+  await generateDutyInstancesForDate(date);
   renderCurrentPage();
   if (document.getElementById("attendanceDate")) {
     document.getElementById("attendanceDate").max = getToday();
   }
 }
-function changeDate(delta) {
+async function changeDate(delta) {
   const d = new Date(currentViewDate);
   d.setDate(d.getDate() + delta);
-  setViewDate(d.toISOString().split("T")[0]);
+  await setViewDate(d.toISOString().split("T")[0]);
 }
-function onDateChange() {
-  setViewDate(document.getElementById("viewDate").value);
+async function onDateChange() {
+  await setViewDate(document.getElementById("viewDate").value);
 }
-function setToday() {
+async function setToday() {
   simulatedDate = null;
-  setViewDate(new Date().toISOString().split("T")[0]);
+  await setViewDate(new Date().toISOString().split("T")[0]);
 }
 
 // ============================================
@@ -1147,7 +1147,7 @@ async function addTagFromModal() {
     const saved = await saveEntity("tags", newTag);
     appData.tags.push(saved);
     if (type === "punishment") {
-      addNotification(
+      await addNotification(
         `⚠️ Punishment tag "${name}" issued for ${
           getLib(selectedLibrarianId)?.name
         }`,
@@ -1498,6 +1498,8 @@ async function saveLeafWizard() {
     created_at: new Date().toISOString(),
   };
 
+  const savedSector = await saveEntity("sectors", newSector);
+
   const newDuty = {
     name: dutyName,
     start_time: start,
@@ -1508,20 +1510,18 @@ async function saveLeafWizard() {
     recurrence_interval: interval,
     end_date: endDate || null,
     is_punishment: isPunishment,
-    sector_id: newSector.id,
+    sector_id: savedSector.id, // ✅ now correct
     created_by: appData.current_user,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
 
-  // Save sector and duty to server
-  const savedSector = await saveEntity("sectors", newSector);
   const savedDuty = await saveEntity("duties", newDuty);
   appData.sectors.push(savedSector);
   appData.duties.push(savedDuty);
 
   currentSectorPath = [window._wizardCategoryId];
-  selectedLeafId = newSector.id;
+  selectedLeafId = savedSector.id;
 
   wizardSpecificDatesList = [];
   window._wizardName = null;
@@ -2046,7 +2046,7 @@ async function deleteDuty(dutyId) {
 // ============================================
 // ATTENDANCE (past & today only)
 // ============================================
-function changeAttendanceDate(delta) {
+async function changeAttendanceDate(delta) {
   const input = document.getElementById("attendanceDate");
   const current = new Date(input.value);
   const today = new Date(getToday());
@@ -2059,17 +2059,17 @@ function changeAttendanceDate(delta) {
       toast("You can't view future attendance.");
     } else {
       input.value = getToday();
-      renderAttendance();
+      await renderAttendance();
       toast("You can't view future dates. Showing today.");
     }
     return;
   }
 
   input.value = newDate.toISOString().split("T")[0];
-  renderAttendance();
+  await renderAttendance();
 }
 
-function renderAttendance() {
+async function renderAttendance() {
   const dateInput = document.getElementById("attendanceDate");
   let date = dateInput.value || getToday();
   dateInput.value = date;
@@ -2079,7 +2079,7 @@ function renderAttendance() {
       '<p class="text-muted">Cannot view future dates.</p>';
     return;
   }
-  generateDutyInstancesForDate(date);
+  await generateDutyInstancesForDate(date);
   const instances = appData.duty_instances.filter(
     (di) => di.date === date && di.is_active
   );
@@ -2143,7 +2143,7 @@ async function saveAttendance() {
   });
   await Promise.all(promises);
   if (saved) {
-    generateMissedNotifications();
+    await generateMissedNotifications();
     saveData();
     renderAttendance();
     renderNotifications();
@@ -2164,6 +2164,7 @@ async function selectAllAttendance(instId, attended) {
     promises.push(saveEntity("attendance", r, r.id));
   });
   await Promise.all(promises);
+  await generateMissedNotifications(); // ← add this line
   renderAttendance();
   toast(`All marked ${attended ? "present" : "absent"}.`);
 }
@@ -2179,7 +2180,7 @@ async function toggleSingleAttendance(recordId, checkbox) {
   await saveEntity("attendance", rec, rec.id);
   const label = checkbox.closest("label");
   if (label) label.className = `person-check ${checked ? "present" : "absent"}`;
-  generateMissedNotifications();
+  await generateMissedNotifications();
   updateNotificationBadge();
   toast(checked ? "✅ Present" : "❌ Absent");
 }
@@ -2300,6 +2301,7 @@ async function toggleAttendanceStatus(recId) {
   rec.confirmed_at = new Date().toISOString();
   rec.confirmed_by = appData.current_user;
   await saveEntity("attendance", rec, rec.id);
+  await generateMissedNotifications();
   viewAttendanceHistory(rec.librarian_id);
   renderCurrentPage();
 }
@@ -2307,22 +2309,34 @@ async function toggleAttendanceStatus(recId) {
 // ============================================
 // NOTIFICATIONS (fully async)
 // ============================================
-function addNotification(msg, type, libId) {
+async function addNotification(
+  msg,
+  type,
+  libId,
+  dutyInstanceId = null,
+  tagId = null
+) {
   const newNotif = {
     message: msg,
     type,
     librarian_id: libId,
+    duty_instance_id: dutyInstanceId,
+    tag_id: tagId,
     date: getToday(),
     is_read: false,
     is_forgotten: false,
     is_dismissed: false,
     created_at: new Date().toISOString(),
   };
-  appData.notifications.push(newNotif);
-  saveEntity("notifications", newNotif).catch((err) => console.error(err));
+  try {
+    const saved = await saveEntity("notifications", newNotif);
+    appData.notifications.push(saved); // push the saved object (has .id)
+  } catch (e) {
+    console.error("Failed to save notification", e);
+  }
 }
 
-function generateMissedNotifications() {
+async function generateMissedNotifications() {
   // Remove old undismissed missed-duty notifications
   appData.notifications = appData.notifications.filter(
     (n) =>
@@ -2351,9 +2365,9 @@ function generateMissedNotifications() {
     grouped[libId].push(att);
   });
 
-  Object.entries(grouped).forEach(([libId, records]) => {
+  for (const [libId, records] of Object.entries(grouped)) {
     const lib = getLib(libId);
-    if (!lib) return;
+    if (!lib) continue;
 
     const alreadyDismissed = appData.notifications.some(
       (n) =>
@@ -2362,7 +2376,7 @@ function generateMissedNotifications() {
         n.is_dismissed
     );
 
-    if (alreadyDismissed) return;
+    if (alreadyDismissed) continue;
 
     const totalMissed = records.length;
     const daysSet = new Set();
@@ -2388,15 +2402,20 @@ function generateMissedNotifications() {
       dismiss_until: null,
       created_at: new Date().toISOString(),
     };
-    appData.notifications.push(newNotif);
-    saveEntity("notifications", newNotif).catch((err) => console.error(err));
-  });
+
+    try {
+      const saved = await saveEntity("notifications", newNotif);
+      appData.notifications.push(saved);
+    } catch (e) {
+      console.error(e);
+    }
+  }
 
   saveData();
 }
 
-function renderNotifications() {
-  generateMissedNotifications();
+async function renderNotifications() {
+  await generateMissedNotifications();
 
   let notifs = appData.notifications;
   if (showDismissed) {
@@ -2685,7 +2704,7 @@ async function runAutoAssign() {
   if (type === "all") {
     pool = appData.librarians.filter((l) => !l.is_deleted);
     appData.sector_assignments = []; // clear all (we will delete all assignments on server too)
-    await deleteEntity("sectors/assignments/all", null); // custom route
+    await fetch(`${API_BASE}/sectors/assignments/all`, { method: "DELETE" });
   } else {
     const assignedIds = new Set(
       appData.sector_assignments.map((a) => a.librarian_id)
@@ -2815,7 +2834,7 @@ async function revertAssignment(historyId) {
     `<p>Restore assignment from ${formatDate(history.timestamp)}?</p>`,
     async () => {
       // Delete all current assignments on server
-      await deleteEntity("sectors/assignments/all", null);
+      await fetch(`${API_BASE}/sectors/assignments/all`, { method: "DELETE" });
       appData.sector_assignments = [];
 
       for (const [secId, libIds] of Object.entries(
@@ -2887,6 +2906,15 @@ async function permanentlyDeleteLibrarian(id) {
     async () => {
       await deleteEntity("librarians", id);
       appData.librarians = appData.librarians.filter((l) => l.id !== id);
+      const assignmentsToDelete = appData.sector_assignments.filter(
+        (a) => a.librarian_id === id
+      );
+      for (const a of assignmentsToDelete) {
+        await fetch(
+          `${API_BASE}/sectors/assignments/${a.sector_id}/${a.librarian_id}`,
+          { method: "DELETE" }
+        );
+      }
       appData.sector_assignments = appData.sector_assignments.filter(
         (a) => a.librarian_id !== id
       );
@@ -2914,6 +2942,16 @@ async function deleteAllArchive() {
     `Delete all ${archived.length} permanently?`,
     async () => {
       for (const l of archived) {
+        // Delete all sector assignments for this librarian from the server
+        const assignments = appData.sector_assignments.filter(
+          (a) => a.librarian_id === l.id
+        );
+        for (const a of assignments) {
+          await fetch(
+            `${API_BASE}/sectors/assignments/${a.sector_id}/${a.librarian_id}`,
+            { method: "DELETE" }
+          );
+        }
         await deleteEntity("librarians", l.id);
       }
       appData.librarians = appData.librarians.filter((l) => !l.is_deleted);
@@ -3210,7 +3248,7 @@ function toast(msg) {
 // ============================================
 async function initApp() {
   await loadData();
-  setViewDate(getToday());
+  await setViewDate(getToday());
 
   const sectorBody = document.querySelector("#sectorModal .modal-body");
   const sectorFooter = document.querySelector("#sectorModal .modal-footer");
@@ -3231,9 +3269,10 @@ async function initApp() {
   setInterval(updateNotificationBadge, 15000);
 }
 
-function renderAttendanceModal() {
+async function renderAttendanceModal() {
   const date =
     document.getElementById("attendanceModalDate").value || getToday();
+  await generateDutyInstancesForDate(date);
   const container = document.getElementById("attendanceModalContainer");
   const instances = appData.duty_instances.filter(
     (di) => di.date === date && di.is_active
@@ -3327,6 +3366,7 @@ async function selectAllAttendanceTab(instanceId, sel) {
     r.confirmed_by = appData.current_user;
     await saveEntity("attendance", r, r.id);
   }
+  await generateMissedNotifications();
   renderAttendanceModal();
   toast(`All ${sel ? "present" : "absent"}.`);
 }
@@ -3347,7 +3387,7 @@ async function saveAttendanceTab(instanceId) {
   });
   await Promise.all(promises);
   if (saved) {
-    generateMissedNotifications();
+    await generateMissedNotifications();
     saveData();
     renderAttendanceModal();
     renderNotifications();
@@ -3631,6 +3671,11 @@ async function deleteSector(id) {
         const clearHistory =
           document.getElementById("deleteLeafHistory")?.checked || false;
         // Remove assignments
+
+        await fetch(`${API_BASE}/sectors/assignments/by-sector/${id}`, {
+          method: "DELETE",
+        });
+
         appData.sector_assignments = appData.sector_assignments.filter(
           (a) => a.sector_id !== id
         );
@@ -3765,7 +3810,9 @@ async function saveAddPeople(secId) {
   }
   // Remove unchecked
   for (const libId of toRemove) {
-    await deleteEntity(`sectors/assignments/${secId}/${libId}`, null);
+    await fetch(`${API_BASE}/sectors/assignments/${secId}/${libId}`, {
+      method: "DELETE",
+    });
     appData.sector_assignments = appData.sector_assignments.filter(
       (a) => !(a.sector_id === secId && a.librarian_id === libId)
     );
