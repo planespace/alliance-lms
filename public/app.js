@@ -177,8 +177,8 @@ async function bulkAddLibrarians() {
   renderCurrentPage();
 }
 
-async function saveEntity(type, data, id = null) {
-  showLoading();
+async function saveEntity(type, data, id = null, skipLoading = false) {
+  if (!skipLoading) showLoading();
   try {
     const url = id ? `${API_BASE}/${type}/${id}` : `${API_BASE}/${type}`;
     const method = id ? "PUT" : "POST";
@@ -194,21 +194,21 @@ async function saveEntity(type, data, id = null) {
       throw new Error(err);
     }
     const saved = await res.json();
-    saved.id = saved._id; // ★ add this line
+    saved.id = saved._id;
     return saved;
   } finally {
-    hideLoading();
+    if (!skipLoading) hideLoading();
   }
 }
 
-async function deleteEntity(type, id) {
-  showLoading();
+async function deleteEntity(type, id, skipLoading = false) {
+  if (!skipLoading) showLoading();
   try {
     const headers = {};
     if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
     await fetch(`${API_BASE}/${type}/${id}`, { method: "DELETE", headers });
   } finally {
-    hideLoading();
+    if (!skipLoading) hideLoading();
   }
 }
 
@@ -2731,36 +2731,78 @@ async function selectAllAttendance(instId, attended) {
   const records = appData.attendance.filter(
     (a) => a.duty_instance_id === instId
   );
-  const promises = [];
+
+  // --- 1. Update UI immediately ---
   records.forEach((r) => {
     r.attended = attended;
     r.forgiven = false;
     r.confirmed_at = new Date().toISOString();
     r.confirmed_by = appData.current_user;
-    promises.push(saveEntity("attendance", r, r.id));
   });
-  await Promise.all(promises);
-  await generateMissedNotifications(); // ← add this line
-  updateDutyBadge();
+
+  // Re‑render the attendance sheet instantly (so all checkboxes change at once)
   renderAttendance();
+
+  updateDutyBadge();
   toast(`All marked ${attended ? "present" : "absent"}.`);
+
+  // --- 2. Save all records in background ---
+  const promises = records.map((r) =>
+    saveEntity("attendance", r, r.id, true).catch((err) => {
+      // If a single save fails, revert that record (optional)
+      r.attended = !attended;
+      console.error("Failed to save record", r.id, err);
+    })
+  );
+  await Promise.all(promises); // wait for all to finish, but UI is already done
+
+  // Re‑render again to catch any reverts (rare)
+  renderAttendance();
+
+  // --- 3. Background notification update ---
+  generateMissedNotifications(); // no await
 }
 
 async function toggleSingleAttendance(recordId, checkbox) {
   const rec = appData.attendance.find((a) => a.id === recordId);
   if (!rec) return;
-  const checked = checkbox.checked;
-  rec.attended = checked;
+
+  const newChecked = checkbox.checked; // what the user wants
+
+  // --- 1. Update UI immediately ---
+  const label = checkbox.closest("label");
+  if (label) {
+    label.className = `person-check ${newChecked ? "present" : "absent"}`;
+  }
+  // Update local data optimistically
+  rec.attended = newChecked;
   rec.forgiven = false;
   rec.confirmed_at = new Date().toISOString();
   rec.confirmed_by = appData.current_user;
-  await saveEntity("attendance", rec, rec.id);
-  const label = checkbox.closest("label");
-  if (label) label.className = `person-check ${checked ? "present" : "absent"}`;
-  await generateMissedNotifications();
+
+  // Update badges instantly (no server needed)
   updateNotificationBadge();
   updateDutyBadge();
-  toast(checked ? "✅ Present" : "❌ Absent");
+
+  // Show a tiny toast immediately
+  toast(newChecked ? "✅ Present" : "❌ Absent");
+
+  // --- 2. Save to server in background ---
+  try {
+    await saveEntity("attendance", rec, rec.id, true); // true = skip loading bar
+  } catch (err) {
+    // If server fails, revert UI and data
+    rec.attended = !newChecked;
+    checkbox.checked = !newChecked;
+    if (label) {
+      label.className = `person-check ${!newChecked ? "present" : "absent"}`;
+    }
+    toast("❌ Failed to save – reverted");
+    console.error(err);
+  }
+
+  // --- 3. Regenerate missed notifications in background (don’t await) ---
+  generateMissedNotifications(); // no await – don’t block UI
 }
 
 // ============================================
@@ -4054,44 +4096,74 @@ async function selectAllAttendanceTab(instanceId, sel) {
   const records = appData.attendance.filter(
     (a) => a.duty_instance_id === instanceId
   );
-  for (const r of records) {
+
+  // 1. Update local data instantly
+  records.forEach((r) => {
     r.attended = sel;
     if (sel) r.forgiven = false;
     r.confirmed_at = new Date().toISOString();
     r.confirmed_by = appData.current_user;
-    await saveEntity("attendance", r, r.id);
-  }
-  await generateMissedNotifications();
+  });
+
+  // 2. Re‑render modal immediately
+  renderAttendanceModal();
+
+  // 3. Update badges
   updateDutyBadge();
 
-  renderAttendanceModal();
   toast(`All ${sel ? "present" : "absent"}.`);
+
+  // 4. Save in background
+  const promises = records.map((r) =>
+    saveEntity("attendance", r, r.id, true).catch((err) => {
+      console.error("Failed to save record", r.id, err);
+    })
+  );
+  await Promise.all(promises);
+
+  // 5. Background notification update
+  generateMissedNotifications();
 }
 
 async function saveAttendanceTab(instanceId) {
-  let saved = 0;
-  const promises = [];
+  const records = appData.attendance.filter(
+    (a) => a.duty_instance_id === instanceId
+  );
+
+  // 1. Immediately apply all checkbox states to the local data
   document.querySelectorAll(".attendance-tab-check").forEach((cb) => {
-    const rec = appData.attendance.find((a) => a.id === cb.dataset.record);
+    const rec = records.find((r) => r.id === cb.dataset.record);
     if (rec && rec.attended !== cb.checked) {
       rec.attended = cb.checked;
       if (cb.checked) rec.forgiven = false;
       rec.confirmed_at = new Date().toISOString();
       rec.confirmed_by = appData.current_user;
-      promises.push(saveEntity("attendance", rec, rec.id));
-      saved++;
     }
   });
-  await Promise.all(promises);
-  if (saved) {
-    await generateMissedNotifications();
-    updateDutyBadge();
 
-    saveData();
-    renderAttendanceModal();
-    renderNotifications();
-    toast(`Saved ${saved} records.`);
-  } else toast("No changes.");
+  // 2. Re‑render the modal instantly (so the user sees the changes)
+  renderAttendanceModal();
+
+  // 3. Update badges immediately
+  updateDutyBadge();
+
+  toast("Saved.");
+
+  // 4. Send all changed records to the server in the background (no loading bar)
+  const promises = [];
+  records.forEach((r) => {
+    // We already updated local data, now just persist
+    promises.push(
+      saveEntity("attendance", r, r.id, true).catch((err) => {
+        console.error("Failed to save record", r.id, err);
+        // Optionally revert (not needed for speed)
+      })
+    );
+  });
+  await Promise.all(promises);
+
+  // 5. Regenerate missed notifications (background)
+  generateMissedNotifications();
 }
 
 function editLeafSector(secId) {
