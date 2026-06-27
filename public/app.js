@@ -50,6 +50,7 @@ let sectorModalOriginalFooter = "";
 // Authentication
 let authToken = localStorage.getItem("authToken") || null;
 let currentUser = JSON.parse(localStorage.getItem("currentUser") || "null");
+let devMode = false;
 // ============================================
 // ONLINE DATA LAYER (replaces localStorage)
 // ============================================
@@ -3530,6 +3531,15 @@ async function initApp() {
 
   document.getElementById("viewDate").max = getToday();
   renderDashboard();
+  // Show date navigator only in dev mode
+  const dateNav = document.querySelector(".date-navigator");
+  if (dateNav) {
+    dateNav.style.display = devMode ? "flex" : "none";
+  }
+  // If not devMode, force simulatedDate to be null (real date always)
+  if (!devMode) {
+    simulatedDate = null;
+  }
   setInterval(async () => {
     try {
       if (currentPage === "notifications") renderNotifications();
@@ -4729,6 +4739,12 @@ document.getElementById("showLogin").addEventListener("click", (e) => {
 });
 
 // ----- Initial load -----
+// Check for dev mode
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.get("dev") === "true") {
+  devMode = true;
+}
+
 if (localStorage.getItem("authToken")) {
   authToken = localStorage.getItem("authToken");
   currentUser = JSON.parse(localStorage.getItem("currentUser"));
@@ -4743,7 +4759,6 @@ if (localStorage.getItem("authToken")) {
     initApp();
   }
 } else {
-  // Check if we're on the reset password page
   if (window.location.search.includes("token=")) {
     document.getElementById("loginPage").style.display = "none";
     document.getElementById("resetPasswordPage").style.display = "flex";
@@ -4752,5 +4767,3 @@ if (localStorage.getItem("authToken")) {
     document.getElementById("resetPasswordPage").style.display = "none";
   }
 }
-
-console.log("📚 Alliance LMS Online Edition loaded.");
