@@ -2389,3 +2389,44 @@ table tbody tr:hover td {
   color: #e53e3e;
   font-weight: bold;
 }
+
+/* --- Compact Quick Leaf Modal --- */
+.quick-leaf-modal {
+  max-width: 620px !important; /* not full screen, nicely centered */
+  width: 95%;
+  max-height: 85vh;
+}
+
+.quick-leaf-body {
+  padding: 20px 24px !important;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+/* Reduce excessive input padding slightly (keep it clean) */
+.quick-leaf-body input,
+.quick-leaf-body select {
+  padding: 8px 12px !important;
+  font-size: 14px;
+}
+
+.quick-leaf-body h4 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--primary);
+  margin: 8px 0 12px;
+}
+
+/* Buttons at the end of the scrollable area, centered */
+.quick-leaf-buttons {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.quick-leaf-buttons .btn {
+  min-width: 120px;
+}

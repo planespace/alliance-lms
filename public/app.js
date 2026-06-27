@@ -89,16 +89,22 @@ async function loadData() {
         r.json()
       ),
     ]);
-    appData.librarians = librarians;
-    appData.sectors = sectors;
-    appData.duties = duties;
-    appData.duty_instances = dutyInstances;
-    appData.attendance = attendance;
-    appData.tags = tags;
-    appData.notifications = notifications;
-    appData.hall_of_fame_captains = captains;
-    appData.hall_of_fame_committees = committees;
-    appData.sector_assignments = assignments;
+
+    // Map _id to id for all collections so the rest of the code works
+    appData.librarians = librarians.map((l) => ({ ...l, id: l._id }));
+    appData.sectors = sectors.map((s) => ({ ...s, id: s._id }));
+    appData.duties = duties.map((d) => ({ ...d, id: d._id }));
+    appData.duty_instances = dutyInstances.map((di) => ({ ...di, id: di._id }));
+    appData.attendance = attendance.map((a) => ({ ...a, id: a._id }));
+    appData.tags = tags.map((t) => ({ ...t, id: t._id }));
+    appData.notifications = notifications.map((n) => ({ ...n, id: n._id }));
+    appData.hall_of_fame_captains = captains.map((c) => ({ ...c, id: c._id }));
+    appData.hall_of_fame_committees = committees.map((c) => ({
+      ...c,
+      id: c._id,
+    }));
+    appData.sector_assignments = assignments.map((a) => ({ ...a, id: a._id }));
+
     const storedSettings = localStorage.getItem("settings");
     if (storedSettings) appData.settings = JSON.parse(storedSettings);
   } catch (err) {
