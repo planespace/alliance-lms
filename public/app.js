@@ -1254,6 +1254,16 @@ async function editCaptain(captainId) {
   document.getElementById("captainYear").value = captain.year;
   document.getElementById("captainHouse").value = captain.house || "";
   document.getElementById("captainPhoto").value = captain.photo_url || "";
+  // Show preview if a photo exists
+  const preview = document.getElementById("captainPhotoPreview");
+  if (preview) {
+    if (captain.photo_url) {
+      preview.src = captain.photo_url;
+      preview.style.display = "inline-block";
+    } else {
+      preview.style.display = "none";
+    }
+  }
   window._editingCaptainId = captainId;
   openModal("hallCaptainModal");
 }
@@ -3736,9 +3746,15 @@ async function editCommittee(committeeId) {
       <td><input type="text" class="cm-position-edit" value="${
         m.position
       }"></td>
-      <td><input type="text" class="cm-photo-edit" value="${
-        m.photo_url || ""
-      }"></td>
+        <td style="display:flex; gap:4px; align-items:center;">
+        <input type="text" class="cm-photo-edit" value="${
+          m.photo_url || ""
+        }" style="flex:1;" />
+        <label class="btn btn-secondary btn-sm" style="cursor:pointer; margin:0; white-space:nowrap;">📁
+          <input type="file" accept="image/*" style="display:none;"
+                 onchange="var parent=this.closest('td'); var input=parent.querySelector('.cm-photo-edit'); if(this.files[0]){ var reader=new FileReader(); reader.onload=function(e){ input.value=e.target.result; }; reader.readAsDataURL(this.files[0]); }" />
+        </label>
+      </td>
       <td><button class="btn btn-danger btn-sm" onclick="this.closest('tr').remove()">✕</button></td>
     `;
     tbody.appendChild(row);
@@ -3900,7 +3916,13 @@ function addCommitteeRow() {
     <td><input type="text" class="cm-class" placeholder="e.g., 10A"></td>
     <td><input type="text" class="cm-house" placeholder="House"></td>
     <td><input type="text" class="cm-position" placeholder="Position"></td>
-    <td><input type="text" class="cm-photo" placeholder="URL (optional)"></td>
+    <td style="display:flex; gap:4px; align-items:center;">
+      <input type="text" class="cm-photo" placeholder="URL (optional)" style="flex:1;" />
+      <label class="btn btn-secondary btn-sm" style="cursor:pointer; margin:0; white-space:nowrap;">📁
+        <input type="file" accept="image/*" style="display:none;"
+               onchange="var parent=this.closest('td'); var input=parent.querySelector('.cm-photo'); if(this.files[0]){ var reader=new FileReader(); reader.onload=function(e){ input.value=e.target.result; }; reader.readAsDataURL(this.files[0]); }" />
+      </label>
+    </td>
     <td><button class="btn btn-danger btn-sm" onclick="this.closest('tr').remove()">✕</button></td>`;
   tbody.appendChild(row);
 }
@@ -3914,7 +3936,13 @@ function addEditCommitteeRow() {
     <td><input type="text" class="cm-class-edit" placeholder="e.g., 10A"></td>
     <td><input type="text" class="cm-house-edit" placeholder="House"></td>
     <td><input type="text" class="cm-position-edit" placeholder="Position"></td>
-    <td><input type="text" class="cm-photo-edit" placeholder="URL (optional)"></td>
+    <td style="display:flex; gap:4px; align-items:center;">
+      <input type="text" class="cm-photo-edit" placeholder="URL (optional)" style="flex:1;" />
+      <label class="btn btn-secondary btn-sm" style="cursor:pointer; margin:0; white-space:nowrap;">📁
+        <input type="file" accept="image/*" style="display:none;"
+               onchange="var parent=this.closest('td'); var input=parent.querySelector('.cm-photo-edit'); if(this.files[0]){ var reader=new FileReader(); reader.onload=function(e){ input.value=e.target.result; }; reader.readAsDataURL(this.files[0]); }" />
+      </label>
+    </td>
     <td><button class="btn btn-danger btn-sm" onclick="this.closest('tr').remove()">✕</button></td>`;
   tbody.appendChild(row);
 }
@@ -5553,6 +5581,26 @@ document.getElementById("showLogin").addEventListener("click", (e) => {
   document.getElementById("showForgot").style.display = "inline";
   document.getElementById("showLogin").style.display = "none";
 });
+
+function handleImageUpload(file, previewImgId, urlInputId) {
+  if (!file || !file.type.startsWith("image/")) {
+    Swal.fire("Error", "Please select an image file.", "error");
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = function (e) {
+    const dataUrl = e.target.result;
+    // Set the hidden URL input value
+    document.getElementById(urlInputId).value = dataUrl;
+    // Show a small preview
+    const preview = document.getElementById(previewImgId);
+    if (preview) {
+      preview.src = dataUrl;
+      preview.style.display = "inline-block";
+    }
+  };
+  reader.readAsDataURL(file);
+}
 
 function rebuildNotificationPopup(libId) {
   const lib = getLib(libId);
