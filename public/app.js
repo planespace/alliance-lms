@@ -2449,12 +2449,13 @@ async function saveEditDuty() {
 
         await saveEntity("duties", duty, duty.id);
 
+        // ★ Immediately create today's instance if the updated duty occurs today
+        await generateDutyInstancesForDate(getToday());
+
         closeModal("editDutyModal");
-        renderCurrentPage(); // ← was renderDuties() before; now updates everything
+        renderCurrentPage();
         updateDutyBadge();
-        toast(
-          "Duty updated – future instances will be recreated when those days arrive."
-        );
+        toast("Duty updated – today’s instance has been refreshed.");
       } catch (err) {
         console.error(err);
         toast("Error saving duty. Please try again.");
