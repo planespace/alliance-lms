@@ -62,19 +62,12 @@ let loadingTimer = null;
 function showLoading() {
   const bar = document.getElementById("loadingBar");
   if (!bar) return;
-  bar.style.width = "0%";
-  // Force reflow to restart transition
-  bar.offsetWidth;
-  bar.style.width = "70%"; // fast progress
-  clearTimeout(loadingTimer);
+  bar.classList.add("active"); // makes it visible (opacity:1)
 }
 function hideLoading() {
   const bar = document.getElementById("loadingBar");
   if (!bar) return;
-  bar.style.width = "100%";
-  loadingTimer = setTimeout(() => {
-    bar.style.width = "0%";
-  }, 300);
+  bar.classList.remove("active"); // fades out
 }
 
 async function loadData() {
@@ -196,7 +189,9 @@ async function saveEntity(type, data, id = null) {
       const err = await res.text();
       throw new Error(err);
     }
-    return res.json();
+    const saved = await res.json();
+    saved.id = saved._id; // ★ add this line
+    return saved;
   } finally {
     hideLoading();
   }
@@ -2381,6 +2376,7 @@ async function saveEditDuty() {
 
       closeModal("editDutyModal");
       renderDuties();
+      updateDutyBadge();
       toast(
         "Duty updated – future instances will be created when those days arrive."
       );
@@ -2488,6 +2484,7 @@ async function deleteDuty(dutyId) {
 
       saveData();
       renderDuties();
+      updateDutyBadge();
       toast(
         `Duty "${duty.name}" deleted.${
           clearHistory ? " Attendance history cleared." : ""
@@ -2598,6 +2595,7 @@ async function saveAttendance() {
   await Promise.all(promises);
   if (saved) {
     await generateMissedNotifications();
+    updateDutyBadge();
     saveData();
     renderAttendance();
     renderNotifications();
@@ -2619,6 +2617,7 @@ async function selectAllAttendance(instId, attended) {
   });
   await Promise.all(promises);
   await generateMissedNotifications(); // ← add this line
+  updateDutyBadge();
   renderAttendance();
   toast(`All marked ${attended ? "present" : "absent"}.`);
 }
@@ -2636,6 +2635,7 @@ async function toggleSingleAttendance(recordId, checkbox) {
   if (label) label.className = `person-check ${checked ? "present" : "absent"}`;
   await generateMissedNotifications();
   updateNotificationBadge();
+  updateDutyBadge();
   toast(checked ? "✅ Present" : "❌ Absent");
 }
 
@@ -2756,6 +2756,7 @@ async function toggleAttendanceStatus(recId) {
   rec.confirmed_by = appData.current_user;
   await saveEntity("attendance", rec, rec.id);
   await generateMissedNotifications();
+  updateDutyBadge();
   viewAttendanceHistory(rec.librarian_id);
   renderCurrentPage();
 }
@@ -3143,122 +3144,130 @@ function issuePunishmentFromNotification(notifId) {
 // AUTO-ASSIGN & REVERT (async)
 // ============================================
 async function runAutoAssign() {
-  const type = document.getElementById("autoAssignType").value;
-  const assignExtra = document.getElementById("autoAssignExtra").checked;
-  const allowMulti = document.getElementById("autoAssignMulti").checked;
+  showLoading();
+  try {
+    const type = document.getElementById("autoAssignType").value;
+    const assignExtra = document.getElementById("autoAssignExtra").checked;
+    const allowMulti = document.getElementById("autoAssignMulti").checked;
 
-  const leafSectors = appData.sectors.filter((s) => s.is_leaf);
-  if (!leafSectors.length) {
-    toast("No leaf sectors found.");
-    closeModal("autoAssignModal");
-    return;
-  }
+    const leafSectors = appData.sectors.filter((s) => s.is_leaf);
+    if (!leafSectors.length) {
+      toast("No leaf sectors found.");
+      closeModal("autoAssignModal");
+      return;
+    }
 
-  let pool;
-  if (type === "all") {
-    pool = appData.librarians.filter((l) => !l.is_deleted);
-    appData.sector_assignments = []; // clear all (we will delete all assignments on server too)
-    const headers = {};
-    if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
-    await fetch(`${API_BASE}/sectors/assignments/all`, {
-      method: "DELETE",
-      headers,
+    let pool;
+    if (type === "all") {
+      pool = appData.librarians.filter((l) => !l.is_deleted);
+      appData.sector_assignments = [];
+      const headers = {};
+      if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+      await fetch(`${API_BASE}/sectors/assignments/all`, {
+        method: "DELETE",
+        headers,
+      });
+    } else {
+      const assignedIds = new Set(
+        appData.sector_assignments.map((a) => a.librarian_id)
+      );
+      pool = appData.librarians.filter(
+        (l) => !l.is_deleted && !assignedIds.has(l.id)
+      );
+    }
+
+    const snapshot = {};
+    leafSectors.forEach(
+      (s) => (snapshot[s.id] = getSectorPeople(s.id).map((p) => p.id))
+    );
+    appData.sector_assignment_history.push({
+      assignment_snapshot: snapshot,
+      timestamp: new Date().toISOString(),
+      created_by: appData.current_user,
+      is_reverted: false,
     });
-  } else {
-    const assignedIds = new Set(
-      appData.sector_assignments.map((a) => a.librarian_id)
-    );
-    pool = appData.librarians.filter(
-      (l) => !l.is_deleted && !assignedIds.has(l.id)
-    );
-  }
+    if (appData.sector_assignment_history.length > 5)
+      appData.sector_assignment_history =
+        appData.sector_assignment_history.slice(-5);
 
-  const snapshot = {};
-  leafSectors.forEach(
-    (s) => (snapshot[s.id] = getSectorPeople(s.id).map((p) => p.id))
-  );
-  appData.sector_assignment_history.push({
-    assignment_snapshot: snapshot,
-    timestamp: new Date().toISOString(),
-    created_by: appData.current_user,
-    is_reverted: false,
-  });
-  if (appData.sector_assignment_history.length > 5)
-    appData.sector_assignment_history =
-      appData.sector_assignment_history.slice(-5);
-
-  let multiLibIds = [];
-  if (allowMulti) {
-    document
-      .querySelectorAll(".multi-select-lib:checked")
-      .forEach((cb) => multiLibIds.push(cb.value));
-  }
-
-  leafSectors.sort((a, b) => (b.min_people || 1) - (a.min_people || 1));
-
-  const usedLibs = new Set();
-  // Phase 1: at least 1 per sector
-  for (const s of leafSectors) {
-    if (getSectorPeople(s.id).length === 0 && pool.length > 0) {
-      const lib = pool.shift();
-      const assignment = {
-        sector_id: s.id,
-        librarian_id: lib.id,
-        assigned_at: new Date().toISOString(),
-      };
-      const saved = await saveEntity("sectors/assignments", assignment);
-      appData.sector_assignments.push(saved);
-      usedLibs.add(lib.id);
+    let multiLibIds = [];
+    if (allowMulti) {
+      document
+        .querySelectorAll(".multi-select-lib:checked")
+        .forEach((cb) => multiLibIds.push(cb.value));
     }
-  }
 
-  // Phase 2: fill minimums
-  for (const s of leafSectors) {
-    const current = getSectorPeople(s.id).length;
-    const needed = (s.min_people || 1) - current;
-    for (let i = 0; i < needed; i++) {
-      let lib = pool.find((l) => !usedLibs.has(l.id));
-      if (!lib && allowMulti) {
-        const available =
-          multiLibIds.length > 0
-            ? pool.filter((l) => multiLibIds.includes(l.id))
-            : pool;
-        lib = available.find(
-          (l) => !getSectorPeople(s.id).some((p) => p.id === l.id)
-        );
+    leafSectors.sort((a, b) => (b.min_people || 1) - (a.min_people || 1));
+    const usedLibs = new Set();
+
+    // Phase 1: at least 1 per sector
+    for (const s of leafSectors) {
+      if (getSectorPeople(s.id).length === 0 && pool.length > 0) {
+        const lib = pool.shift();
+        const assignment = {
+          sector_id: s.id,
+          librarian_id: lib.id,
+          assigned_at: new Date().toISOString(),
+        };
+        const saved = await saveEntity("sectors/assignments", assignment);
+        appData.sector_assignments.push(saved);
+        usedLibs.add(lib.id);
       }
-      if (!lib) break;
-      const assignment = {
-        sector_id: s.id,
-        librarian_id: lib.id,
-        assigned_at: new Date().toISOString(),
-      };
-      const saved = await saveEntity("sectors/assignments", assignment);
-      appData.sector_assignments.push(saved);
-      usedLibs.add(lib.id);
     }
-  }
 
-  // Phase 3: extra
-  if (assignExtra) {
-    const remaining = pool.filter((l) => !usedLibs.has(l.id));
-    for (const lib of remaining) {
-      const randomSector =
-        leafSectors[Math.floor(Math.random() * leafSectors.length)];
-      const assignment = {
-        sector_id: randomSector.id,
-        librarian_id: lib.id,
-        assigned_at: new Date().toISOString(),
-      };
-      const saved = await saveEntity("sectors/assignments", assignment);
-      appData.sector_assignments.push(saved);
+    // Phase 2: fill minimums
+    for (const s of leafSectors) {
+      const current = getSectorPeople(s.id).length;
+      const needed = (s.min_people || 1) - current;
+      for (let i = 0; i < needed; i++) {
+        let lib = pool.find((l) => !usedLibs.has(l.id));
+        if (!lib && allowMulti) {
+          const available =
+            multiLibIds.length > 0
+              ? pool.filter((l) => multiLibIds.includes(l.id))
+              : pool;
+          lib = available.find(
+            (l) => !getSectorPeople(s.id).some((p) => p.id === l.id)
+          );
+        }
+        if (!lib) break;
+        const assignment = {
+          sector_id: s.id,
+          librarian_id: lib.id,
+          assigned_at: new Date().toISOString(),
+        };
+        const saved = await saveEntity("sectors/assignments", assignment);
+        appData.sector_assignments.push(saved);
+        usedLibs.add(lib.id);
+      }
     }
-  }
 
-  saveData();
-  closeModal("autoAssignModal");
-  renderSectors();
-  toast("Auto‑assign completed.");
+    // Phase 3: extra
+    if (assignExtra) {
+      const remaining = pool.filter((l) => !usedLibs.has(l.id));
+      for (const lib of remaining) {
+        const randomSector =
+          leafSectors[Math.floor(Math.random() * leafSectors.length)];
+        const assignment = {
+          sector_id: randomSector.id,
+          librarian_id: lib.id,
+          assigned_at: new Date().toISOString(),
+        };
+        const saved = await saveEntity("sectors/assignments", assignment);
+        appData.sector_assignments.push(saved);
+      }
+    }
+
+    saveData();
+    closeModal("autoAssignModal");
+    renderSectors();
+    toast("Auto‑assign completed.");
+  } catch (err) {
+    console.error(err);
+    toast("Auto‑assign failed.");
+  } finally {
+    hideLoading();
+  }
 }
 
 function populateRevertList() {
@@ -3292,34 +3301,40 @@ async function revertAssignment(historyId) {
     "Revert Assignment",
     `<p>Restore assignment from ${formatDate(history.timestamp)}?</p>`,
     async () => {
-      // Delete all current assignments on server
-      const headers = {};
-      if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
-      await fetch(`${API_BASE}/sectors/assignments/all`, {
-        method: "DELETE",
-        headers,
-      });
-      appData.sector_assignments = [];
-
-      for (const [secId, libIds] of Object.entries(
-        history.assignment_snapshot
-      )) {
-        for (const libId of libIds) {
-          if (getLib(libId)) {
-            const assignment = {
-              sector_id: secId,
-              librarian_id: libId,
-              assigned_at: new Date().toISOString(),
-            };
-            const saved = await saveEntity("sectors/assignments", assignment);
-            appData.sector_assignments.push(saved);
+      showLoading();
+      try {
+        const headers = {};
+        if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+        await fetch(`${API_BASE}/sectors/assignments/all`, {
+          method: "DELETE",
+          headers,
+        });
+        appData.sector_assignments = [];
+        for (const [secId, libIds] of Object.entries(
+          history.assignment_snapshot
+        )) {
+          for (const libId of libIds) {
+            if (getLib(libId)) {
+              const assignment = {
+                sector_id: secId,
+                librarian_id: libId,
+                assigned_at: new Date().toISOString(),
+              };
+              const saved = await saveEntity("sectors/assignments", assignment);
+              appData.sector_assignments.push(saved);
+            }
           }
         }
+        history.is_reverted = true;
+        closeModal("revertModal");
+        renderSectors();
+        toast("Reverted.");
+      } catch (err) {
+        console.error(err);
+        toast("Revert failed.");
+      } finally {
+        hideLoading();
       }
-      history.is_reverted = true;
-      closeModal("revertModal");
-      renderSectors();
-      toast("Reverted.");
     }
   );
 }
@@ -3368,34 +3383,42 @@ async function permanentlyDeleteLibrarian(id) {
     "Permanently Delete",
     `<p>Delete <strong>${lib.name}</strong> permanently?</p><p class="text-danger">Cannot be undone!</p>`,
     async () => {
-      await deleteEntity("librarians", id);
-      appData.librarians = appData.librarians.filter((l) => l.id !== id);
-      const assignmentsToDelete = appData.sector_assignments.filter(
-        (a) => a.librarian_id === id
-      );
-      for (const a of assignmentsToDelete) {
-        const headers = {};
-        if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
-        await fetch(
-          `${API_BASE}/sectors/assignments/${a.sector_id}/${a.librarian_id}`,
-          { method: "DELETE", headers }
+      showLoading();
+      try {
+        await deleteEntity("librarians", id);
+        appData.librarians = appData.librarians.filter((l) => l.id !== id);
+        const assignmentsToDelete = appData.sector_assignments.filter(
+          (a) => a.librarian_id === id
         );
+        for (const a of assignmentsToDelete) {
+          const headers = {};
+          if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+          await fetch(
+            `${API_BASE}/sectors/assignments/${a.sector_id}/${a.librarian_id}`,
+            { method: "DELETE", headers }
+          );
+        }
+        appData.sector_assignments = appData.sector_assignments.filter(
+          (a) => a.librarian_id !== id
+        );
+        appData.attendance = appData.attendance.filter(
+          (a) => a.librarian_id !== id
+        );
+        appData.tags = appData.tags.filter((t) => t.librarian_id !== id);
+        appData.tag_history = appData.tag_history.filter(
+          (t) => t.librarian_id !== id
+        );
+        appData.notifications = appData.notifications.filter(
+          (n) => n.librarian_id !== id
+        );
+        renderCurrentPage();
+        toast("Permanently deleted.");
+      } catch (err) {
+        console.error(err);
+        toast("Delete failed.");
+      } finally {
+        hideLoading();
       }
-      appData.sector_assignments = appData.sector_assignments.filter(
-        (a) => a.librarian_id !== id
-      );
-      appData.attendance = appData.attendance.filter(
-        (a) => a.librarian_id !== id
-      );
-      appData.tags = appData.tags.filter((t) => t.librarian_id !== id);
-      appData.tag_history = appData.tag_history.filter(
-        (t) => t.librarian_id !== id
-      );
-      appData.notifications = appData.notifications.filter(
-        (n) => n.librarian_id !== id
-      );
-      renderCurrentPage();
-      toast("Permanently deleted.");
     }
   );
 }
@@ -3407,43 +3430,49 @@ async function deleteAllArchive() {
     "Delete All Archived",
     `Delete all ${archived.length} permanently?`,
     async () => {
-      for (const l of archived) {
-        // Delete all sector assignments for this librarian from the server
-        const assignments = appData.sector_assignments.filter(
-          (a) => a.librarian_id === l.id
-        );
-        for (const a of assignments) {
-          const headers = {};
-          if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
-          await fetch(
-            `${API_BASE}/sectors/assignments/${a.sector_id}/${a.librarian_id}`,
-            { method: "DELETE", headers }
+      showLoading();
+      try {
+        for (const l of archived) {
+          const assignments = appData.sector_assignments.filter(
+            (a) => a.librarian_id === l.id
           );
+          for (const a of assignments) {
+            const headers = {};
+            if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+            await fetch(
+              `${API_BASE}/sectors/assignments/${a.sector_id}/${a.librarian_id}`,
+              { method: "DELETE", headers }
+            );
+          }
+          await deleteEntity("librarians", l.id);
         }
-        await deleteEntity("librarians", l.id);
+        appData.librarians = appData.librarians.filter((l) => !l.is_deleted);
+        appData.sector_assignments = appData.sector_assignments.filter(
+          (a) => !archived.some((l) => l.id === a.librarian_id)
+        );
+        appData.attendance = appData.attendance.filter(
+          (a) => !archived.some((l) => l.id === a.librarian_id)
+        );
+        appData.tags = appData.tags.filter(
+          (t) => !archived.some((l) => l.id === t.librarian_id)
+        );
+        appData.tag_history = appData.tag_history.filter(
+          (t) => !archived.some((l) => l.id === t.librarian_id)
+        );
+        appData.notifications = appData.notifications.filter(
+          (n) => !archived.some((l) => l.id === n.librarian_id)
+        );
+        renderCurrentPage();
+        toast("All archived permanently deleted.");
+      } catch (err) {
+        console.error(err);
+        toast("Deletion failed.");
+      } finally {
+        hideLoading();
       }
-      appData.librarians = appData.librarians.filter((l) => !l.is_deleted);
-      appData.sector_assignments = appData.sector_assignments.filter(
-        (a) => !archived.some((l) => l.id === a.librarian_id)
-      );
-      appData.attendance = appData.attendance.filter(
-        (a) => !archived.some((l) => l.id === a.librarian_id)
-      );
-      appData.tags = appData.tags.filter(
-        (t) => !archived.some((l) => l.id === t.librarian_id)
-      );
-      appData.tag_history = appData.tag_history.filter(
-        (t) => !archived.some((l) => l.id === t.librarian_id)
-      );
-      appData.notifications = appData.notifications.filter(
-        (n) => !archived.some((l) => l.id === n.librarian_id)
-      );
-      renderCurrentPage();
-      toast("All archived permanently deleted.");
     }
   );
 }
-
 // ============================================
 // COMMITTEE
 // ============================================
@@ -3742,6 +3771,7 @@ async function initApp() {
       if (currentPage === "notifications") renderNotifications();
       await generateDutyInstancesForDate(getToday());
       await cleanExpiredTags();
+      updateDutyBadge();
     } catch (e) {
       console.error(e);
     }
@@ -3847,6 +3877,8 @@ async function selectAllAttendanceTab(instanceId, sel) {
     await saveEntity("attendance", r, r.id);
   }
   await generateMissedNotifications();
+  updateDutyBadge();
+
   renderAttendanceModal();
   toast(`All ${sel ? "present" : "absent"}.`);
 }
@@ -3868,6 +3900,8 @@ async function saveAttendanceTab(instanceId) {
   await Promise.all(promises);
   if (saved) {
     await generateMissedNotifications();
+    updateDutyBadge();
+
     saveData();
     renderAttendanceModal();
     renderNotifications();
@@ -3954,6 +3988,17 @@ function updateNotificationBadge() {
     (n) => !n.is_read && !n.is_forgotten && !n.is_dismissed
   ).length;
   badge.textContent = count;
+}
+
+function updateDutyBadge() {
+  const badge = document.getElementById("dutyBadge");
+  if (!badge) return;
+  const todayDuties = appData.duty_instances.filter((di) => {
+    if (di.date !== getToday() || !di.is_active) return false;
+    const duty = appData.duties.find((d) => d.id === di.duty_id);
+    return duty && (!duty.end_date || duty.end_date >= getToday());
+  });
+  badge.textContent = todayDuties.length;
 }
 
 function viewTagDetails(tagId) {
@@ -4148,91 +4193,111 @@ async function deleteSector(id) {
   if (!sec) return;
 
   if (sec.is_leaf) {
-    // Leaf sector
     showConfirm(
       "Delete Leaf Sector",
       `<p>Delete <strong>${sec.name}</strong>?</p>
        <label><input type="checkbox" id="deleteLeafHistory"> Also delete attendance history</label>`,
       async () => {
-        const clearHistory =
-          document.getElementById("deleteLeafHistory")?.checked || false;
-        // Remove assignments
-
-        const headers = {};
-        if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
-        await fetch(`${API_BASE}/sectors/assignments/by-sector/${id}`, {
-          method: "DELETE",
-          headers,
-        });
-
-        appData.sector_assignments = appData.sector_assignments.filter(
-          (a) => a.sector_id !== id
-        );
-        // Find and delete duties linked to this sector
-        const duties = appData.duties.filter((d) => d.sector_id === id);
-        for (const duty of duties) {
-          const instances = appData.duty_instances.filter(
-            (di) => di.duty_id === duty.id
+        showLoading();
+        try {
+          const clearHistory =
+            document.getElementById("deleteLeafHistory")?.checked || false;
+          const headers = {};
+          if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+          await fetch(`${API_BASE}/sectors/assignments/by-sector/${id}`, {
+            method: "DELETE",
+            headers,
+          });
+          appData.sector_assignments = appData.sector_assignments.filter(
+            (a) => a.sector_id !== id
           );
-          if (clearHistory) {
-            for (const inst of instances) {
-              await deleteEntity("attendance/by-instance", inst.id);
-            }
-            appData.attendance = appData.attendance.filter(
-              (a) => !instances.some((inst) => inst.id === a.duty_instance_id)
+          const duties = appData.duties.filter((d) => d.sector_id === id);
+          for (const duty of duties) {
+            const instances = appData.duty_instances.filter(
+              (di) => di.duty_id === duty.id
             );
+            if (clearHistory) {
+              for (const inst of instances) {
+                await deleteEntity("attendance/by-instance", inst.id);
+              }
+              appData.attendance = appData.attendance.filter(
+                (a) => !instances.some((inst) => inst.id === a.duty_instance_id)
+              );
+            }
+            for (const inst of instances) {
+              await deleteEntity("duties/instances", inst.id);
+            }
+            appData.duty_instances = appData.duty_instances.filter(
+              (di) => di.duty_id !== duty.id
+            );
+            await deleteEntity("duties", duty.id);
+            appData.duties = appData.duties.filter((d) => d.id !== duty.id);
           }
-          for (const inst of instances) {
-            await deleteEntity("duties/instances", inst.id);
-          }
-          appData.duty_instances = appData.duty_instances.filter(
-            (di) => di.duty_id !== duty.id
-          );
-          await deleteEntity("duties", duty.id);
-          appData.duties = appData.duties.filter((d) => d.id !== duty.id);
+          await deleteEntity("sectors", id);
+          appData.sectors = appData.sectors.filter((s) => s.id !== id);
+          selectedLeafId = null;
+          renderSectors();
+          updateDutyBadge();
+          toast("Leaf sector deleted.");
+        } catch (err) {
+          console.error(err);
+          toast("Deletion failed.");
+        } finally {
+          hideLoading();
         }
-        // Delete sector
-        await deleteEntity("sectors", id);
-        appData.sectors = appData.sectors.filter((s) => s.id !== id);
-        selectedLeafId = null;
-        renderSectors();
-        toast("Leaf sector deleted.");
       }
     );
   } else {
-    // Category – recursively delete leaf children
+    // Category deletion remains similar
     showConfirm(
       "Delete Category",
       `<p>Delete <strong>${sec.name}</strong> and all its leaf sectors?</p>`,
       async () => {
-        const children = appData.sectors.filter((s) => s.parent_id === id);
-        for (const child of children) {
-          await deleteSector(child.id); // recursion – will handle each leaf
+        showLoading();
+        try {
+          const children = appData.sectors.filter((s) => s.parent_id === id);
+          for (const child of children) {
+            // Recursion, but child's deleteSector will itself show loading again.
+            // To avoid nested loading bars, we could suppress, but it's okay for now.
+            await deleteSector(child.id);
+          }
+          await deleteEntity("sectors", id);
+          appData.sectors = appData.sectors.filter((s) => s.id !== id);
+          currentSectorPath = [];
+          selectedLeafId = null;
+          renderSectors();
+          toast("Category deleted.");
+        } catch (err) {
+          console.error(err);
+          toast("Deletion failed.");
+        } finally {
+          hideLoading();
         }
-        await deleteEntity("sectors", id);
-        appData.sectors = appData.sectors.filter((s) => s.id !== id);
-        currentSectorPath = [];
-        selectedLeafId = null;
-        renderSectors();
-        toast("Category deleted.");
       }
     );
   }
 }
 
 async function removeFromSector(sectorId, libId) {
-  // Call the API to delete the assignment (the route exists: DELETE /api/sectors/assignments/:sectorId/:libId)
-  const headers = {};
-  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
-  await fetch(`${API_BASE}/sectors/assignments/${sectorId}/${libId}`, {
-    method: "DELETE",
-    headers,
-  });
-  appData.sector_assignments = appData.sector_assignments.filter(
-    (a) => !(a.sector_id === sectorId && a.librarian_id === libId)
-  );
-  renderSectors();
-  toast("Removed.");
+  showLoading();
+  try {
+    const headers = {};
+    if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+    await fetch(`${API_BASE}/sectors/assignments/${sectorId}/${libId}`, {
+      method: "DELETE",
+      headers,
+    });
+    appData.sector_assignments = appData.sector_assignments.filter(
+      (a) => !(a.sector_id === sectorId && a.librarian_id === libId)
+    );
+    renderSectors();
+    toast("Removed.");
+  } catch (err) {
+    console.error(err);
+    toast("Removal failed.");
+  } finally {
+    hideLoading();
+  }
 }
 
 async function removeAllFromSector(secId) {
@@ -4276,45 +4341,53 @@ function openAddPeopleModal(secId) {
 }
 
 async function saveAddPeople(secId) {
-  const checks = document.querySelectorAll(".add-people-check");
-  const toAdd = [];
-  const toRemove = [];
-  checks.forEach((cb) => {
-    if (
-      cb.checked &&
-      !appData.sector_assignments.some(
-        (a) => a.sector_id === secId && a.librarian_id === cb.value
-      )
-    ) {
-      toAdd.push(cb.value);
-    } else if (!cb.checked) {
-      toRemove.push(cb.value);
+  showLoading();
+  try {
+    const checks = document.querySelectorAll(".add-people-check");
+    const toAdd = [];
+    const toRemove = [];
+    checks.forEach((cb) => {
+      if (
+        cb.checked &&
+        !appData.sector_assignments.some(
+          (a) => a.sector_id === secId && a.librarian_id === cb.value
+        )
+      ) {
+        toAdd.push(cb.value);
+      } else if (!cb.checked) {
+        toRemove.push(cb.value);
+      }
+    });
+    for (const libId of toAdd) {
+      const saved = await saveEntity("sectors/assignments", {
+        sector_id: secId,
+        librarian_id: libId,
+        assigned_at: new Date().toISOString(),
+      });
+      appData.sector_assignments.push(saved);
     }
-  });
-  // Add new assignments
-  for (const libId of toAdd) {
-    const saved = await saveEntity("sectors/assignments", {
-      sector_id: secId,
-      librarian_id: libId,
-      assigned_at: new Date().toISOString(),
-    });
-    appData.sector_assignments.push(saved);
+    for (const libId of toRemove) {
+      const headers = {};
+      if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+      await fetch(`${API_BASE}/sectors/assignments/${secId}/${libId}`, {
+        method: "DELETE",
+        headers,
+      });
+      appData.sector_assignments = appData.sector_assignments.filter(
+        (a) => !(a.sector_id === secId && a.librarian_id === libId)
+      );
+    }
+    document
+      .querySelectorAll(".modal-overlay.active")
+      .forEach((m) => m.remove());
+    renderSectors();
+    toast("People updated.");
+  } catch (err) {
+    console.error(err);
+    toast("Update failed.");
+  } finally {
+    hideLoading();
   }
-  // Remove unchecked
-  for (const libId of toRemove) {
-    const headers = {};
-    if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
-    await fetch(`${API_BASE}/sectors/assignments/${secId}/${libId}`, {
-      method: "DELETE",
-      headers,
-    });
-    appData.sector_assignments = appData.sector_assignments.filter(
-      (a) => !(a.sector_id === secId && a.librarian_id === libId)
-    );
-  }
-  document.querySelectorAll(".modal-overlay.active").forEach((m) => m.remove());
-  renderSectors();
-  toast("People updated.");
 }
 
 function renderDuties() {
@@ -4636,6 +4709,7 @@ async function createDuty() {
 
   closeModal("dutyModal");
   renderCurrentPage();
+  updateDutyBadge();
   toast(`Duty "${name}" created.`);
 }
 
