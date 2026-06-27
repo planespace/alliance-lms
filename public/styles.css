@@ -2201,3 +2201,161 @@ table tbody tr:hover td {
   padding: 4px 12px;
   font-size: 12px;
 }
+
+.login-links {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.login-links a {
+  display: block;
+  font-size: 14px;
+  color: var(--text-secondary);
+  text-decoration: underline;
+}
+
+.login-links a:hover {
+  color: var(--accent);
+}
+
+/* ============================================
+   PROFILE PAGE
+   ============================================ */
+#page-profile.active {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 20px;
+  flex: none;
+}
+
+.profile-content {
+  background: var(--card-bg);
+  border-radius: var(--radius);
+  padding: 32px 36px;
+  box-shadow: var(--shadow);
+  border: 1px solid var(--border);
+  max-width: 520px;
+  width: 100%;
+}
+
+.profile-content h2 {
+  font-size: var(--font-size-xl);
+  font-weight: 700;
+  color: var(--primary);
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.profile-content h2::before {
+  content: "👤";
+  font-size: 26px;
+}
+
+.profile-content h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--primary-light);
+  margin-top: 32px;
+  margin-bottom: 16px;
+  border-top: 2px solid var(--border);
+  padding-top: 20px;
+}
+
+#profileInfo {
+  background: #f8fafc;
+  border-radius: var(--radius-sm);
+  padding: 20px;
+  margin-bottom: 8px;
+}
+
+#profileInfo p {
+  display: flex;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid #e2e8f0;
+  font-size: 14px;
+}
+
+#profileInfo p:last-child {
+  border-bottom: none;
+}
+
+#profileInfo p strong {
+  width: 120px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+#profileUsername,
+#profileEmail {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* Change password form */
+#page-profile .form-group {
+  margin-bottom: 18px;
+}
+
+#page-profile .form-group label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+#page-profile .form-group input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 14px;
+  transition: var(--transition);
+  background: white;
+}
+
+#page-profile .form-group input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1);
+}
+
+#page-profile .btn-primary {
+  background: var(--accent);
+  color: white;
+  border: none;
+  padding: 10px 24px;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  transition: var(--transition);
+  box-shadow: 0 2px 8px rgba(59, 130, 246, 0.2);
+  margin-top: 8px;
+}
+
+#page-profile .btn-primary:hover {
+  background: var(--accent-dark);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.3);
+}
+
+#profileMsg {
+  margin-top: 14px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+#profileMsg span {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 20px;
+}

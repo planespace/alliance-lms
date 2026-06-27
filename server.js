@@ -7,7 +7,11 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const path = require("path");
 
-// Import routes
+// Import the protect middleware from auth routes
+const { protect } = require("./routes/auth");
+
+// Import route handlers
+const authRouter = require("./routes/auth");
 const librariansRouter = require("./routes/librarians");
 const sectorsRouter = require("./routes/sectors");
 const dutiesRouter = require("./routes/duties");
@@ -15,7 +19,6 @@ const attendanceRouter = require("./routes/attendance");
 const tagsRouter = require("./routes/tags");
 const notificationsRouter = require("./routes/notifications");
 const halloffameRouter = require("./routes/halloffame");
-const authRouter = require("./routes/auth");
 
 const app = express();
 
@@ -31,6 +34,12 @@ mongoose
   .connect(process.env.MONGODB_URI)
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.error(err));
+
+// Protect all /api routes except /api/auth
+app.use("/api", (req, res, next) => {
+  if (req.path.startsWith("/auth")) return next();
+  protect(req, res, next);
+});
 
 // API routes
 app.use("/api/auth", authRouter);

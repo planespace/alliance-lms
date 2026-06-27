@@ -47,12 +47,17 @@ let sectorSpecificDatesList = [];
 let modalZIndex = 1000;
 let sectorModalOriginalBody = "";
 let sectorModalOriginalFooter = "";
-
+// Authentication
+let authToken = localStorage.getItem("authToken") || null;
+let currentUser = JSON.parse(localStorage.getItem("currentUser") || "null");
 // ============================================
 // ONLINE DATA LAYER (replaces localStorage)
 // ============================================
 
 async function loadData() {
+  const headers = {};
+  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+
   try {
     const [
       librarians,
@@ -66,16 +71,22 @@ async function loadData() {
       committees,
       assignments,
     ] = await Promise.all([
-      fetch(`${API_BASE}/librarians`).then((r) => r.json()),
-      fetch(`${API_BASE}/sectors`).then((r) => r.json()),
-      fetch(`${API_BASE}/duties`).then((r) => r.json()),
-      fetch(`${API_BASE}/duties/instances`).then((r) => r.json()),
-      fetch(`${API_BASE}/attendance`).then((r) => r.json()),
-      fetch(`${API_BASE}/tags`).then((r) => r.json()),
-      fetch(`${API_BASE}/notifications`).then((r) => r.json()),
-      fetch(`${API_BASE}/halloffame/captains`).then((r) => r.json()),
-      fetch(`${API_BASE}/halloffame/committees`).then((r) => r.json()),
-      fetch(`${API_BASE}/sectors/assignments`).then((r) => r.json()),
+      fetch(`${API_BASE}/librarians`, { headers }).then((r) => r.json()),
+      fetch(`${API_BASE}/sectors`, { headers }).then((r) => r.json()),
+      fetch(`${API_BASE}/duties`, { headers }).then((r) => r.json()),
+      fetch(`${API_BASE}/duties/instances`, { headers }).then((r) => r.json()),
+      fetch(`${API_BASE}/attendance`, { headers }).then((r) => r.json()),
+      fetch(`${API_BASE}/tags`, { headers }).then((r) => r.json()),
+      fetch(`${API_BASE}/notifications`, { headers }).then((r) => r.json()),
+      fetch(`${API_BASE}/halloffame/captains`, { headers }).then((r) =>
+        r.json()
+      ),
+      fetch(`${API_BASE}/halloffame/committees`, { headers }).then((r) =>
+        r.json()
+      ),
+      fetch(`${API_BASE}/sectors/assignments`, { headers }).then((r) =>
+        r.json()
+      ),
     ]);
     appData.librarians = librarians;
     appData.sectors = sectors;
@@ -143,11 +154,9 @@ async function bulkAddLibrarians() {
 async function saveEntity(type, data, id = null) {
   const url = id ? `${API_BASE}/${type}/${id}` : `${API_BASE}/${type}`;
   const method = id ? "PUT" : "POST";
-  const res = await fetch(url, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
+  const headers = { "Content-Type": "application/json" };
+  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+  const res = await fetch(url, { method, headers, body: JSON.stringify(data) });
   if (!res.ok) {
     const err = await res.text();
     throw new Error(err);
@@ -156,7 +165,9 @@ async function saveEntity(type, data, id = null) {
 }
 
 async function deleteEntity(type, id) {
-  await fetch(`${API_BASE}/${type}/${id}`, { method: "DELETE" });
+  const headers = {};
+  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+  await fetch(`${API_BASE}/${type}/${id}`, { method: "DELETE", headers });
 }
 
 function saveData() {
@@ -328,23 +339,40 @@ function tagColor(type) {
 // ============================================
 // AUTH & NAVIGATION
 // ============================================
-function handleLogin() {
-  const username = document.getElementById("loginUsername").value.trim();
+async function handleLogin() {
+  const email = document.getElementById("loginEmail").value.trim();
   const password = document.getElementById("loginPassword").value.trim();
-  if (username && password) {
+  const errorDiv = document.getElementById("loginError");
+  errorDiv.style.display = "none";
+  if (!email || !password) {
+    errorDiv.textContent = "Email and password are required.";
+    errorDiv.style.display = "block";
+    return;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    authToken = data.token;
+    currentUser = data.user;
+    localStorage.setItem("authToken", authToken);
+    localStorage.setItem("currentUser", JSON.stringify(currentUser));
     document.getElementById("loginPage").style.display = "none";
     document.getElementById("appContainer").classList.add("active");
-    document.getElementById("currentUser").textContent = username;
-    document.getElementById("userAvatar").textContent = username
+    document.getElementById("currentUser").textContent = currentUser.username;
+    document.getElementById("userAvatar").textContent = currentUser.username
       .charAt(0)
       .toUpperCase();
-    appData.current_user = username;
+    appData.current_user = currentUser.username;
     saveData();
     initApp();
-  } else {
-    const err = document.getElementById("loginError");
-    err.style.display = "block";
-    setTimeout(() => (err.style.display = "none"), 3000);
+  } catch (err) {
+    errorDiv.textContent = err.message;
+    errorDiv.style.display = "block";
   }
 }
 document.addEventListener("keydown", (e) => {
@@ -356,11 +384,230 @@ document.addEventListener("keydown", (e) => {
 });
 function handleLogout() {
   if (confirm("Are you sure you want to logout?")) {
-    appData.current_user = "";
-    saveData();
+    localStorage.removeItem("authToken");
+    localStorage.removeItem("currentUser");
+    authToken = null;
+    currentUser = null;
     location.reload();
   }
 }
+
+// --- REGISTER ---
+async function handleRegister() {
+  const username = document.getElementById("regUsername").value.trim();
+  const email = document.getElementById("regEmail").value.trim();
+  const password = document.getElementById("regPassword").value;
+  const confirm = document.getElementById("regConfirmPassword").value;
+  const errorDiv = document.getElementById("registerError");
+  errorDiv.style.display = "none";
+  if (password !== confirm) {
+    errorDiv.textContent = "Passwords do not match.";
+    errorDiv.style.display = "block";
+    return;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, email, password }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    authToken = data.token;
+    currentUser = data.user;
+    localStorage.setItem("authToken", authToken);
+    localStorage.setItem("currentUser", JSON.stringify(currentUser));
+    document.getElementById("loginPage").style.display = "none";
+    document.getElementById("appContainer").classList.add("active");
+    document.getElementById("currentUser").textContent = currentUser.username;
+    document.getElementById("userAvatar").textContent = currentUser.username
+      .charAt(0)
+      .toUpperCase();
+    appData.current_user = currentUser.username;
+    initApp();
+  } catch (err) {
+    errorDiv.textContent = err.message;
+    errorDiv.style.display = "block";
+  }
+}
+
+// --- FORGOT PASSWORD ---
+async function handleForgotPassword() {
+  const email = document.getElementById("forgotEmail").value.trim();
+  const errorDiv = document.getElementById("forgotError");
+  errorDiv.style.display = "none";
+  if (!email) {
+    errorDiv.textContent = "Email is required.";
+    errorDiv.style.display = "block";
+    return;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/auth/forgot-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    document.getElementById("loginSuccess").textContent = data.message;
+    document.getElementById("loginSuccess").style.display = "block";
+  } catch (err) {
+    errorDiv.textContent = err.message;
+    errorDiv.style.display = "block";
+  }
+}
+
+// --- RESET PASSWORD (called from /reset-password.html?token=...) ---
+async function handleResetPassword() {
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("token");
+  const newPassword = document.getElementById("newPassword").value;
+  const confirm = document.getElementById("confirmNewPassword").value;
+  const errorDiv = document.getElementById("resetError");
+  const successDiv = document.getElementById("resetSuccess");
+  errorDiv.style.display = "none";
+  if (!token) {
+    errorDiv.textContent = "Invalid reset link.";
+    errorDiv.style.display = "block";
+    return;
+  }
+  if (newPassword !== confirm) {
+    errorDiv.textContent = "Passwords do not match.";
+    errorDiv.style.display = "block";
+    return;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/auth/reset-password`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token, newPassword }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    successDiv.textContent = data.message + " You can now login.";
+    successDiv.style.display = "block";
+  } catch (err) {
+    errorDiv.textContent = err.message;
+    errorDiv.style.display = "block";
+  }
+}
+
+// --- CHANGE USERNAME (for logged-in user) ---
+async function changeUsername() {
+  const newUsername = document
+    .getElementById("newProfileUsername")
+    .value.trim();
+  const currentPassword = document.getElementById(
+    "usernameCurrentPassword"
+  ).value;
+  const msgDiv = document.getElementById("usernameMsg");
+  if (!newUsername) {
+    msgDiv.innerHTML =
+      '<span style="color:red;">Please enter a new username.</span>';
+    return;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/auth/change-username`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ currentPassword, newUsername }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    // Update currentUser in memory and localStorage
+    currentUser.username = newUsername;
+    localStorage.setItem("currentUser", JSON.stringify(currentUser));
+    document.getElementById("profileUsername").textContent = newUsername;
+    document.getElementById("currentUser").textContent = newUsername;
+    document.getElementById("userAvatar").textContent = newUsername
+      .charAt(0)
+      .toUpperCase();
+    appData.current_user = newUsername;
+    // Clear inputs
+    document.getElementById("newProfileUsername").value = "";
+    document.getElementById("usernameCurrentPassword").value = "";
+    msgDiv.innerHTML = '<span style="color:green;">Username updated!</span>';
+  } catch (err) {
+    msgDiv.innerHTML = `<span style="color:red;">${err.message}</span>`;
+  }
+}
+
+// --- CHANGE EMAIL (modified – clears inputs on success) ---
+async function changeEmail() {
+  const newEmail = document.getElementById("newProfileEmail").value.trim();
+  const currentPassword = document.getElementById("emailCurrentPassword").value;
+  const msgDiv = document.getElementById("emailMsg");
+  if (!newEmail) {
+    msgDiv.innerHTML =
+      '<span style="color:red;">Please enter a new email.</span>';
+    return;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/auth/change-email`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ currentPassword, newEmail }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    // Update currentUser in memory and localStorage
+    currentUser.email = newEmail;
+    localStorage.setItem("currentUser", JSON.stringify(currentUser));
+    document.getElementById("profileEmail").textContent = newEmail;
+    // Clear inputs
+    document.getElementById("newProfileEmail").value = "";
+    document.getElementById("emailCurrentPassword").value = "";
+    msgDiv.innerHTML = '<span style="color:green;">Email updated!</span>';
+  } catch (err) {
+    msgDiv.innerHTML = `<span style="color:red;">${err.message}</span>`;
+  }
+}
+
+// --- CHANGE PASSWORD (modified – clears inputs on success) ---
+async function changePassword() {
+  const current = document.getElementById("currentPassword").value;
+  const newPass = document.getElementById("newProfilePassword").value;
+  const confirm = document.getElementById("confirmNewProfilePassword").value;
+  const msgDiv = document.getElementById("profileMsg");
+  if (newPass !== confirm) {
+    msgDiv.innerHTML =
+      '<span style="color:red;">New passwords do not match.</span>';
+    return;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/auth/change-password`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authToken}`,
+      },
+      body: JSON.stringify({ currentPassword: current, newPassword: newPass }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    // Clear inputs
+    document.getElementById("currentPassword").value = "";
+    document.getElementById("newProfilePassword").value = "";
+    document.getElementById("confirmNewProfilePassword").value = "";
+    msgDiv.innerHTML = '<span style="color:green;">Password updated!</span>';
+  } catch (err) {
+    msgDiv.innerHTML = `<span style="color:red;">${err.message}</span>`;
+  }
+}
+
+// --- RENDER PROFILE PAGE ---
+function renderProfile() {
+  if (!currentUser) return;
+  document.getElementById("profileUsername").textContent = currentUser.username;
+  document.getElementById("profileEmail").textContent = currentUser.email;
+}
+
 function navigateTo(page) {
   currentPage = page;
   document
@@ -382,6 +629,7 @@ function navigateTo(page) {
     halloffame: "Hall of Fame",
     committee: "Committee",
     archive: "Archive",
+    profile: "Profile",
   };
   document.getElementById("pageTitle").textContent = titles[page] || page;
   if (page === "sectors") currentSectorPath = [];
@@ -409,6 +657,9 @@ function navigateTo(page) {
       break;
     case "archive":
       renderArchive();
+      break;
+    case "profile":
+      renderProfile();
       break;
   }
   document.getElementById("sidebar").classList.remove("open");
@@ -1666,6 +1917,7 @@ async function selectAllDutyAttendance(dutyId, date, sel) {
       await saveEntity("attendance", r, r.id);
     }
   }
+  await generateMissedNotifications();
   renderDutyAttendance();
   toast(sel ? "All present" : "All absent");
 }
@@ -2704,7 +2956,12 @@ async function runAutoAssign() {
   if (type === "all") {
     pool = appData.librarians.filter((l) => !l.is_deleted);
     appData.sector_assignments = []; // clear all (we will delete all assignments on server too)
-    await fetch(`${API_BASE}/sectors/assignments/all`, { method: "DELETE" });
+    const headers = {};
+    if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+    await fetch(`${API_BASE}/sectors/assignments/all`, {
+      method: "DELETE",
+      headers,
+    });
   } else {
     const assignedIds = new Set(
       appData.sector_assignments.map((a) => a.librarian_id)
@@ -2834,7 +3091,12 @@ async function revertAssignment(historyId) {
     `<p>Restore assignment from ${formatDate(history.timestamp)}?</p>`,
     async () => {
       // Delete all current assignments on server
-      await fetch(`${API_BASE}/sectors/assignments/all`, { method: "DELETE" });
+      const headers = {};
+      if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+      await fetch(`${API_BASE}/sectors/assignments/all`, {
+        method: "DELETE",
+        headers,
+      });
       appData.sector_assignments = [];
 
       for (const [secId, libIds] of Object.entries(
@@ -2910,9 +3172,11 @@ async function permanentlyDeleteLibrarian(id) {
         (a) => a.librarian_id === id
       );
       for (const a of assignmentsToDelete) {
+        const headers = {};
+        if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
         await fetch(
           `${API_BASE}/sectors/assignments/${a.sector_id}/${a.librarian_id}`,
-          { method: "DELETE" }
+          { method: "DELETE", headers }
         );
       }
       appData.sector_assignments = appData.sector_assignments.filter(
@@ -2947,9 +3211,11 @@ async function deleteAllArchive() {
           (a) => a.librarian_id === l.id
         );
         for (const a of assignments) {
+          const headers = {};
+          if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
           await fetch(
             `${API_BASE}/sectors/assignments/${a.sector_id}/${a.librarian_id}`,
-            { method: "DELETE" }
+            { method: "DELETE", headers }
           );
         }
         await deleteEntity("librarians", l.id);
@@ -3223,6 +3489,9 @@ function renderCurrentPage() {
       break;
     case "archive":
       renderArchive();
+      break;
+    case "profile":
+      renderProfile();
       break;
   }
 }
@@ -3567,12 +3836,18 @@ function showAllTagsPopup(libId) {
   document.body.appendChild(overlay);
 }
 
-function quickDeleteTag(tagId) {
+async function quickDeleteTag(tagId) {
   const tag = appData.tags.find((t) => t.id === tagId);
   if (!tag) return;
   tag.is_active = false;
   tag.removed_at = new Date().toISOString();
-  saveEntity("tags", tag, tag.id);
+  try {
+    await saveEntity("tags", tag, tag.id);
+  } catch (e) {
+    console.error("Failed to delete tag", e);
+    toast("Error removing tag");
+    return;
+  }
   appData.tag_history.push({
     tag_id: tag.id,
     librarian_id: tag.librarian_id,
@@ -3672,8 +3947,11 @@ async function deleteSector(id) {
           document.getElementById("deleteLeafHistory")?.checked || false;
         // Remove assignments
 
+        const headers = {};
+        if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
         await fetch(`${API_BASE}/sectors/assignments/by-sector/${id}`, {
           method: "DELETE",
+          headers,
         });
 
         appData.sector_assignments = appData.sector_assignments.filter(
@@ -3733,8 +4011,11 @@ async function deleteSector(id) {
 
 async function removeFromSector(sectorId, libId) {
   // Call the API to delete the assignment (the route exists: DELETE /api/sectors/assignments/:sectorId/:libId)
+  const headers = {};
+  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
   await fetch(`${API_BASE}/sectors/assignments/${sectorId}/${libId}`, {
     method: "DELETE",
+    headers,
   });
   appData.sector_assignments = appData.sector_assignments.filter(
     (a) => !(a.sector_id === sectorId && a.librarian_id === libId)
@@ -3810,8 +4091,11 @@ async function saveAddPeople(secId) {
   }
   // Remove unchecked
   for (const libId of toRemove) {
+    const headers = {};
+    if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
     await fetch(`${API_BASE}/sectors/assignments/${secId}/${libId}`, {
       method: "DELETE",
+      headers,
     });
     appData.sector_assignments = appData.sector_assignments.filter(
       (a) => !(a.sector_id === secId && a.librarian_id === libId)
@@ -4411,9 +4695,58 @@ function renderLeafContent(secId) {
   `;
 }
 
-// Auto-login check removed – always show login page
-// This mimics the localStorage version's behaviour where a stored current_user would skip login,
-// but since we now have a real backend, you may implement session later.
-// For now, the login page is always shown on first load.
+// Toggle login/register/forgot forms
+document.getElementById("showRegister").addEventListener("click", (e) => {
+  e.preventDefault();
+  document.getElementById("loginForm").style.display = "none";
+  document.getElementById("registerForm").style.display = "block";
+  document.getElementById("forgotForm").style.display = "none";
+  document.getElementById("showRegister").style.display = "none";
+  document.getElementById("showForgot").style.display = "none";
+  document.getElementById("showLogin").style.display = "inline";
+});
+document.getElementById("showForgot").addEventListener("click", (e) => {
+  e.preventDefault();
+  document.getElementById("loginForm").style.display = "none";
+  document.getElementById("registerForm").style.display = "none";
+  document.getElementById("forgotForm").style.display = "block";
+  document.getElementById("showRegister").style.display = "none";
+  document.getElementById("showForgot").style.display = "none";
+  document.getElementById("showLogin").style.display = "inline";
+});
+document.getElementById("showLogin").addEventListener("click", (e) => {
+  e.preventDefault();
+  document.getElementById("loginForm").style.display = "block";
+  document.getElementById("registerForm").style.display = "none";
+  document.getElementById("forgotForm").style.display = "none";
+  document.getElementById("showRegister").style.display = "inline";
+  document.getElementById("showForgot").style.display = "inline";
+  document.getElementById("showLogin").style.display = "none";
+});
+
+// ----- Initial load -----
+if (localStorage.getItem("authToken")) {
+  authToken = localStorage.getItem("authToken");
+  currentUser = JSON.parse(localStorage.getItem("currentUser"));
+  if (currentUser) {
+    document.getElementById("loginPage").style.display = "none";
+    document.getElementById("appContainer").classList.add("active");
+    document.getElementById("currentUser").textContent = currentUser.username;
+    document.getElementById("userAvatar").textContent = currentUser.username
+      .charAt(0)
+      .toUpperCase();
+    appData.current_user = currentUser.username;
+    initApp();
+  }
+} else {
+  // Check if we're on the reset password page
+  if (window.location.search.includes("token=")) {
+    document.getElementById("loginPage").style.display = "none";
+    document.getElementById("resetPasswordPage").style.display = "flex";
+  } else {
+    document.getElementById("loginPage").style.display = "flex";
+    document.getElementById("resetPasswordPage").style.display = "none";
+  }
+}
 
 console.log("📚 Alliance LMS Online Edition loaded.");
