@@ -138,14 +138,21 @@ async function startBackgroundSync() {
     Object.assign(appData, fresh);
     localStorage.setItem("appDataCache", JSON.stringify(fresh));
 
-    // NOW generate missed notifications with fresh data
+    // Regenerate missed notifications with fresh data
     await generateMissedNotifications();
 
-    // Re‑render the current page so everything is up to date
+    // Re‑render the current page, but skip if the user is viewing notifications
+    // (notifications have their own periodic refresh)
+    if (currentPage !== "notifications") {
+      renderCurrentPage();
+    }
 
     updateDutyBadge();
+    updateNotificationBadge();
   } catch (err) {
     console.error("Background sync failed", err);
+  } finally {
+    hideLoading();
   }
 }
 
@@ -4300,10 +4307,13 @@ async function initApp() {
   currentViewDate = getToday();
   document.getElementById("viewDate").value = currentViewDate;
 
-  // 3. Render the dashboard instantly with whatever we have
+  // 3. Render the dashboard instantly with whatever we have (cached or empty)
   renderDashboard();
 
-  // 4. Set up the date navigator (dev mode) – no blocking
+  // 4. Show loading bar during the initial background sync
+  showLoading();
+
+  // 5. Set up the date navigator (dev mode) – no blocking
   if (!devMode) {
     document.getElementById("viewDate").max = getToday();
   }
@@ -4313,18 +4323,17 @@ async function initApp() {
     dateNav.style.display = devMode ? "flex" : "none";
   }
 
-  // 5. Restore sector modal originals
+  // 6. Restore sector modal originals
   const sectorBody = document.querySelector("#sectorModal .modal-body");
   const sectorFooter = document.querySelector("#sectorModal .modal-footer");
   if (sectorBody) sectorModalOriginalBody = sectorBody.innerHTML;
   if (sectorFooter) sectorModalOriginalFooter = sectorFooter.innerHTML;
 
-  // 6. Start all slow work in the background (don’t block the UI)
-  startBackgroundSync(); // fetch fresh data + update UI
-  setViewDate(getToday()); // generate duty instances (no await)
-  // generateMissedNotifications() is now inside startBackgroundSync
+  // 7. Start all slow work in the background (don’t block the UI)
+  startBackgroundSync(); // will hide loading bar when done
+  setViewDate(getToday()); // fire & forget
 
-  // 7. Periodic intervals
+  // 8. Periodic intervals (unchanged)
   setInterval(async () => {
     try {
       if (currentPage === "notifications") renderNotifications();
