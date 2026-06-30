@@ -81,42 +81,50 @@ async function loadData() {
   if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
 
   try {
-    const data = await fetch(`${API_BASE}/all`, { headers }).then((r) =>
-      r.json()
-    );
+    const [
+      librarians,
+      sectors,
+      duties,
+      dutyInstances,
+      attendance,
+      tags,
+      notifications,
+      captains,
+      committees,
+      assignments,
+    ] = await Promise.all([
+      fetch(`${API_BASE}/librarians`, { headers }).then((r) => r.json()),
+      fetch(`${API_BASE}/sectors`, { headers }).then((r) => r.json()),
+      fetch(`${API_BASE}/duties`, { headers }).then((r) => r.json()),
+      fetch(`${API_BASE}/duties/instances`, { headers }).then((r) => r.json()),
+      fetch(`${API_BASE}/attendance`, { headers }).then((r) => r.json()),
+      fetch(`${API_BASE}/tags`, { headers }).then((r) => r.json()),
+      fetch(`${API_BASE}/notifications`, { headers }).then((r) => r.json()),
+      fetch(`${API_BASE}/halloffame/captains`, { headers }).then((r) =>
+        r.json()
+      ),
+      fetch(`${API_BASE}/halloffame/committees`, { headers }).then((r) =>
+        r.json()
+      ),
+      fetch(`${API_BASE}/sectors/assignments`, { headers }).then((r) =>
+        r.json()
+      ),
+    ]);
 
-    // Map _id to id for every collection – same logic as before
-    appData.librarians = (data.librarians || []).map((l) => ({
-      ...l,
-      id: l._id,
-    }));
-    appData.sectors = (data.sectors || []).map((s) => ({ ...s, id: s._id }));
-    appData.duties = (data.duties || []).map((d) => ({ ...d, id: d._id }));
-    appData.duty_instances = (data.dutyInstances || []).map((di) => ({
-      ...di,
-      id: di._id,
-    }));
-    appData.attendance = (data.attendance || []).map((a) => ({
-      ...a,
-      id: a._id,
-    }));
-    appData.tags = (data.tags || []).map((t) => ({ ...t, id: t._id }));
-    appData.notifications = (data.notifications || []).map((n) => ({
-      ...n,
-      id: n._id,
-    }));
-    appData.hall_of_fame_captains = (data.captains || []).map((c) => ({
+    // Map _id to id for all collections
+    appData.librarians = librarians.map((l) => ({ ...l, id: l._id }));
+    appData.sectors = sectors.map((s) => ({ ...s, id: s._id }));
+    appData.duties = duties.map((d) => ({ ...d, id: d._id }));
+    appData.duty_instances = dutyInstances.map((di) => ({ ...di, id: di._id }));
+    appData.attendance = attendance.map((a) => ({ ...a, id: a._id }));
+    appData.tags = tags.map((t) => ({ ...t, id: t._id }));
+    appData.notifications = notifications.map((n) => ({ ...n, id: n._id }));
+    appData.hall_of_fame_captains = captains.map((c) => ({ ...c, id: c._id }));
+    appData.hall_of_fame_committees = committees.map((c) => ({
       ...c,
       id: c._id,
     }));
-    appData.hall_of_fame_committees = (data.committees || []).map((c) => ({
-      ...c,
-      id: c._id,
-    }));
-    appData.sector_assignments = (data.assignments || []).map((a) => ({
-      ...a,
-      id: a._id,
-    }));
+    appData.sector_assignments = assignments.map((a) => ({ ...a, id: a._id }));
 
     const storedSettings = localStorage.getItem("settings");
     if (storedSettings) appData.settings = JSON.parse(storedSettings);
