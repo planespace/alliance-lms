@@ -43,7 +43,17 @@ app.use(express.static(path.join(__dirname, "public")));
 // Connect to MongoDB
 mongoose
   .connect(process.env.MONGODB_URI)
-  .then(() => console.log("MongoDB connected"))
+  .then(() => {
+    console.log("MongoDB connected");
+    // Keep the connection and indexes warm – a lightweight ping every 4 minutes
+    setInterval(async () => {
+      try {
+        await mongoose.connection.db.admin().ping();
+      } catch (e) {
+        // silently ignore – the next request will re‑establish
+      }
+    }, 4 * 60 * 1000); // every 4 minutes
+  })
   .catch((err) => console.error(err));
 
 // Protect all /api routes except /api/auth
