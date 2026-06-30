@@ -1892,6 +1892,7 @@ async function saveQuickLeaf() {
   showLoading();
 
   try {
+    // 1. Read & validate all inputs
     const categoryId = document.getElementById("quickParentCategoryId").value;
     const name = document.getElementById("quickLeafName").value.trim();
     const min = parseInt(document.getElementById("quickLeafMin").value);
@@ -1945,7 +1946,12 @@ async function saveQuickLeaf() {
       return;
     }
 
-    const newSector = {
+    // 2. Create temporary objects for instant UI
+    const tempSectorId = "temp_sector_" + Date.now();
+    const tempDutyId = "temp_duty_" + Date.now();
+
+    const tempSector = {
+      id: tempSectorId,
       name,
       parent_id: categoryId,
       leader_ids: [],
@@ -1966,10 +1972,52 @@ async function saveQuickLeaf() {
         },
       ],
       created_at: new Date().toISOString(),
+      _temp: true,
     };
-    const savedSector = await saveEntity("sectors", newSector);
-    appData.sectors.push(savedSector);
 
+    const tempDuty = {
+      id: tempDutyId,
+      name: dutyName,
+      start_time: start,
+      end_time: end,
+      days,
+      recurrence_type: recurrence,
+      specific_dates: specificDates,
+      recurrence_interval: interval,
+      end_date: endDate || null,
+      is_punishment: isPunishment,
+      sector_id: tempSectorId, // link to temp sector
+      created_by: appData.current_user,
+      created_at: new Date().toISOString(),
+      _temp: true,
+    };
+
+    // 3. Push into local cache & close modal immediately
+    appData.sectors.push(tempSector);
+    appData.duties.push(tempDuty);
+
+    currentSectorPath = [categoryId];
+    selectedLeafId = tempSectorId;
+    closeModal("quickLeafModal");
+    renderCurrentPage();
+    toast(`Creating leaf sector "${name}"…`);
+
+    // 4. Save sector first (to get a real ID)
+    const newSector = { ...tempSector };
+    delete newSector.id;
+    delete newSector._temp;
+
+    const savedSector = await saveEntity("sectors", newSector);
+
+    // Replace temp sector with real one
+    const sectorIdx = appData.sectors.findIndex((s) => s.id === tempSectorId);
+    if (sectorIdx !== -1) {
+      appData.sectors[sectorIdx] = { ...savedSector, id: savedSector._id };
+    } else {
+      appData.sectors.push({ ...savedSector, id: savedSector._id });
+    }
+
+    // 5. Save duty with the real sector_id
     const newDuty = {
       name: dutyName,
       start_time: start,
@@ -1980,30 +2028,36 @@ async function saveQuickLeaf() {
       recurrence_interval: interval,
       end_date: endDate || null,
       is_punishment: isPunishment,
-      sector_id: savedSector.id,
+      sector_id: savedSector._id, // ← real sector ID
       created_by: appData.current_user,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
     const savedDuty = await saveEntity("duties", newDuty);
-    appData.duties.push(savedDuty);
 
-    // ★ CREATE TODAY'S INSTANCE IMMEDIATELY
+    // Replace temp duty with real one
+    const dutyIdx = appData.duties.findIndex((d) => d.id === tempDutyId);
+    if (dutyIdx !== -1) {
+      appData.duties[dutyIdx] = { ...savedDuty, id: savedDuty._id };
+    } else {
+      appData.duties.push({ ...savedDuty, id: savedDuty._id });
+    }
+
+    // 6. Generate today's instance if the duty occurs today
     const today = getToday();
-    if (dutyOccursOnDate(newDuty, today)) {
+    if (dutyOccursOnDate(savedDuty, today)) {
       const newInst = {
-        duty_id: newDuty.id,
+        duty_id: savedDuty._id,
         date: today,
         is_active: true,
         created_at: new Date().toISOString(),
       };
       const savedInst = await saveEntity("duties/instances", newInst);
-      appData.duty_instances.push(savedInst);
-      // Add attendance records for people already in the sector (usually none yet, but safe)
-      const sectorPeopleIds = getSectorPeople(savedSector.id).map((p) => p.id);
+      appData.duty_instances.push({ ...savedInst, id: savedInst._id });
+      const sectorPeopleIds = getSectorPeople(savedSector._id).map((p) => p.id);
       for (const libId of sectorPeopleIds) {
         const att = {
-          duty_instance_id: savedInst.id,
+          duty_instance_id: savedInst._id,
           librarian_id: libId,
           attended: false,
           confirmed_by: "system",
@@ -2012,18 +2066,21 @@ async function saveQuickLeaf() {
           punishment_issued: false,
         };
         const savedAtt = await saveEntity("attendance", att);
-        appData.attendance.push(savedAtt);
+        appData.attendance.push({ ...savedAtt, id: savedAtt._id });
       }
     }
 
-    currentSectorPath = [categoryId];
-    selectedLeafId = savedSector.id;
-    closeModal("quickLeafModal");
+    // 7. Update the UI with the real objects
+    selectedLeafId = savedSector._id;
     renderCurrentPage();
     toast(`Leaf sector "${name}" added.`);
   } catch (err) {
+    // Remove temporary objects if they still exist
+    appData.sectors = appData.sectors.filter((s) => s._temp !== true);
+    appData.duties = appData.duties.filter((d) => d._temp !== true);
+    renderCurrentPage();
+    toast("Error saving leaf sector – rolled back.");
     console.error(err);
-    toast("Error saving leaf sector.");
   } finally {
     saveQuickLeafInProgress = false;
     if (saveBtn) {
