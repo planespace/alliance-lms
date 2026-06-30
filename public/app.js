@@ -2834,6 +2834,7 @@ async function deleteDuty(dutyId) {
 // ============================================
 // ATTENDANCE (past & today only)
 // ============================================
+let attendanceDateTimeout;
 async function changeAttendanceDate(delta) {
   const input = document.getElementById("attendanceDate");
   const current = new Date(input.value);
@@ -2842,6 +2843,7 @@ async function changeAttendanceDate(delta) {
   const newDate = new Date(current);
   newDate.setDate(newDate.getDate() + delta);
 
+  // Prevent going past today
   if (newDate > today) {
     if (current.getTime() === today.getTime()) {
       toast("You can't view future attendance.");
@@ -2854,7 +2856,12 @@ async function changeAttendanceDate(delta) {
   }
 
   input.value = newDate.toISOString().split("T")[0];
-  await renderAttendance();
+
+  // Debounce the actual render – wait 200ms after the last click
+  clearTimeout(attendanceDateTimeout);
+  attendanceDateTimeout = setTimeout(async () => {
+    await renderAttendance();
+  }, 200);
 }
 
 async function renderAttendance() {
