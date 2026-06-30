@@ -5334,42 +5334,69 @@ async function markAttendedFromNotification(recordId, btn) {
   if (attendanceMarkingInProgress) return;
   attendanceMarkingInProgress = true;
 
-  // 1. Immediately disable the button and show a very brief "Saving..."
   if (btn) {
     btn.disabled = true;
     btn.innerHTML = "⏳";
   }
 
-  // 2. Find the librarian ID before we change anything
   const attendanceRecord = appData.attendance.find((a) => a.id === recordId);
   const libId = attendanceRecord ? attendanceRecord.librarian_id : null;
 
-  // 3. Optimistically remove the row from the popup RIGHT NOW
+  // 1. Optimistically remove the row from the popup
   if (libId) {
     buildNotificationPopupExcluding(libId, recordId);
   }
 
-  // 4. Do the server work in the background (don’t block the UI)
+  // 2. Optimistically update the main notification list AND badge RIGHT NOW
+  if (libId) {
+    // Count how many missed duties this librarian has (excluding the one being marked)
+    const missedAfter = appData.attendance.filter(
+      (a) =>
+        a.librarian_id === libId &&
+        !a.attended &&
+        !a.forgiven &&
+        !a.punishment_issued &&
+        a.id !== recordId
+    ).length;
+
+    // Remove or update the cumulative notification for this librarian
+    appData.notifications = appData.notifications.filter((n) => {
+      if (n.type === "cumulative_all" && n.librarian_id === libId) {
+        if (missedAfter === 0) return false; // delete it
+        // Update the message
+        n.message = `⚠️ ${getLib(libId).name} missed ${missedAfter} duty(ies)`;
+      }
+      return true;
+    });
+
+    // If no more missed duties, close the popup; otherwise it's already refreshed
+    if (missedAfter === 0) {
+      closeModal("notificationActionModal");
+    }
+  }
+
+  // 3. Refresh the main notification list and badge instantly
+  renderNotifications(); // this now uses the locally updated data
+
+  // 4. Do the server work in the background
   try {
-    await forgiveAttendanceRecord(recordId); // just saves the record
-    await generateMissedNotifications(); // updates the list
+    await forgiveAttendanceRecord(recordId);
+    await generateMissedNotifications();
+
+    // After server confirms, refresh again to be 100% in sync
     if (currentPage === "notifications") {
-      renderNotifications(); // refresh the main list
+      renderNotifications();
     } else {
       updateNotificationBadge();
     }
   } catch (err) {
     console.error(err);
     toast("Failed to mark as attended.");
+    // Revert optimistic changes – force a full regeneration
+    await generateMissedNotifications();
+    renderNotifications();
   } finally {
     attendanceMarkingInProgress = false;
-  }
-
-  // 5. After the server work, rebuild the popup with the real data
-  if (libId) {
-    rebuildNotificationPopup(libId);
-  } else {
-    closeModal("notificationActionModal");
   }
 }
 
@@ -5940,7 +5967,7 @@ function buildNotificationPopupExcluding(libId, excludeRecordId) {
   const missedRecords = appData.attendance.filter((a) => {
     if (a.librarian_id !== libId) return false;
     if (a.attended || a.forgiven || a.punishment_issued) return false;
-    if (a.id === excludeRecordId) return false; // <-- removes the clicked row instantly
+    if (a.id === excludeRecordId) return false;
     const instance = appData.duty_instances.find(
       (di) => di.id === a.duty_instance_id
     );
@@ -5950,13 +5977,9 @@ function buildNotificationPopupExcluding(libId, excludeRecordId) {
   const content = document.getElementById("notificationActionContent");
   if (!content) return;
 
+  // If no more missed records, close the modal immediately
   if (missedRecords.length === 0) {
-    content.innerHTML = `
-      <div style="text-align:center; padding:30px;">
-        <h4 style="color:var(--success);">✅ All duties are now marked as attended.</h4>
-        <p style="margin-top:10px;">Great job!</p>
-        <button class="btn btn-secondary" onclick="closeModal('notificationActionModal')">Close</button>
-      </div>`;
+    closeModal("notificationActionModal");
     return;
   }
 
@@ -6007,7 +6030,6 @@ function buildNotificationPopupExcluding(libId, excludeRecordId) {
   html += `</tbody></table></div>`;
   content.innerHTML = html;
 }
-
 function rebuildNotificationPopup(libId) {
   const lib = getLib(libId);
   if (!lib) {
@@ -6027,13 +6049,9 @@ function rebuildNotificationPopup(libId) {
   const content = document.getElementById("notificationActionContent");
   if (!content) return;
 
+  // Auto‑close when no more missed duties remain
   if (missedRecords.length === 0) {
-    content.innerHTML = `
-      <div style="text-align:center; padding:30px;">
-        <h4 style="color:var(--success);">✅ All duties are now marked as attended.</h4>
-        <p style="margin-top:10px;">Great job!</p>
-        <button class="btn btn-secondary" onclick="closeModal('notificationActionModal')">Close</button>
-      </div>`;
+    closeModal("notificationActionModal");
     return;
   }
 
@@ -6084,7 +6102,6 @@ function rebuildNotificationPopup(libId) {
   html += `</tbody></table></div>`;
   content.innerHTML = html;
 }
-
 // ============================================
 // SERVICE WORKER REGISTRATION (instant offline)
 // ============================================
