@@ -136,11 +136,17 @@ async function startBackgroundSync() {
       })),
     };
 
-    Object.assign(appData, fresh);
+    // Merge all fresh data EXCEPT notifications (they stay local)
+    const { notifications: _, ...restOfFresh } = fresh;
+    Object.assign(appData, restOfFresh);
     localStorage.setItem("appDataCache", JSON.stringify(fresh));
 
-    // Regenerate missed notifications with fresh data
-    await generateMissedNotifications();
+    // Rebuild the local notification list from the fresh attendance data
+    syncLocalNotifications();
+
+    // Update badges silently
+    updateDutyBadge();
+    updateNotificationBadge();
 
     // Re‑render the current page, but skip if the user is viewing notifications
     // (notifications have their own periodic refresh)
@@ -3246,7 +3252,6 @@ async function generateMissedNotifications() {
   generatingMissedNotifications = true;
 
   try {
-    // ---------- YOUR EXISTING CODE BELOW (unchanged) ----------
     const missedRecords = appData.attendance.filter((a) => {
       if (a.attended || a.forgiven || a.punishment_issued) return false;
       const instance = appData.duty_instances.find(
@@ -3255,48 +3260,22 @@ async function generateMissedNotifications() {
       return instance !== undefined;
     });
 
-    if (missedRecords.length > 0) {
-      const libIdsWithMissed = new Set(
-        missedRecords.map((a) => a.librarian_id)
-      );
-      const toDelete = appData.notifications.filter(
-        (n) =>
-          n.type === "cumulative_all" && libIdsWithMissed.has(n.librarian_id)
-      );
-      for (const n of toDelete) {
-        await deleteEntity("notifications", n.id, true);
-      }
-      appData.notifications = appData.notifications.filter(
-        (n) =>
-          !(n.type === "cumulative_all" && libIdsWithMissed.has(n.librarian_id))
-      );
-    }
-
-    const oldUndismissed = appData.notifications.filter(
-      (n) =>
-        (n.type === "missed_duty" ||
-          n.type === "cumulative_miss" ||
-          n.type === "cumulative_all") &&
-        !n.is_dismissed
+    // Delete old cumulative notifications from the server (silent)
+    // We only delete those that have real server IDs (not our local_ IDs)
+    const serverCumulative = appData.notifications.filter(
+      (n) => n.type === "cumulative_all" && !n.id.startsWith("local_")
     );
-    for (const n of oldUndismissed) {
+    for (const n of serverCumulative) {
       await deleteEntity("notifications", n.id, true);
     }
-    appData.notifications = appData.notifications.filter(
-      (n) =>
-        !(
-          (n.type === "missed_duty" ||
-            n.type === "cumulative_miss" ||
-            n.type === "cumulative_all") &&
-          !n.is_dismissed
-        )
-    );
 
+    // If no missed records, we're done (the local list was already cleared by syncLocalNotifications)
     if (missedRecords.length === 0) {
       saveData();
       return;
     }
 
+    // Create fresh cumulative notifications on the server (they will be stored but never displayed)
     const grouped = {};
     missedRecords.forEach((att) => {
       const libId = att.librarian_id;
@@ -3333,12 +3312,7 @@ async function generateMissedNotifications() {
         created_at: new Date().toISOString(),
       };
 
-      try {
-        const saved = await saveEntity("notifications", newNotif, null, true);
-        appData.notifications.push(saved);
-      } catch (e) {
-        console.error(e);
-      }
+      await saveEntity("notifications", newNotif, null, true);
     }
 
     saveData();
@@ -3346,10 +3320,8 @@ async function generateMissedNotifications() {
     generatingMissedNotifications = false;
   }
 }
-
 function syncLocalNotifications() {
-  // Completely rebuild cumulative notifications from current attendance data
-  // (no server IDs, no duplicates)
+  // Build the entire local notification list from the current attendance state
   const missedRecords = appData.attendance.filter((a) => {
     if (a.attended || a.forgiven || a.punishment_issued) return false;
     const instance = appData.duty_instances.find(
@@ -3358,51 +3330,56 @@ function syncLocalNotifications() {
     return instance !== undefined;
   });
 
-  // Remove all existing cumulative notifications (both local and server)
-  appData.notifications = appData.notifications.filter(
+  // Keep any non‑cumulative notifications (dismissed ones, old types, etc.)
+  const otherNotifs = appData.notifications.filter(
     (n) => n.type !== "cumulative_all"
   );
 
-  if (missedRecords.length === 0) return;
+  const newCumulative = [];
 
-  const grouped = {};
-  missedRecords.forEach((att) => {
-    const libId = att.librarian_id;
-    if (!grouped[libId]) grouped[libId] = [];
-    grouped[libId].push(att);
-  });
-
-  for (const [libId, records] of Object.entries(grouped)) {
-    const lib = getLib(libId);
-    if (!lib) continue;
-
-    const totalMissed = records.length;
-    const daysSet = new Set();
-    records.forEach((att) => {
-      const instance = appData.duty_instances.find(
-        (di) => di.id === att.duty_instance_id
-      );
-      if (instance) daysSet.add(instance.date);
+  if (missedRecords.length > 0) {
+    const grouped = {};
+    missedRecords.forEach((att) => {
+      const libId = att.librarian_id;
+      if (!grouped[libId]) grouped[libId] = [];
+      grouped[libId].push(att);
     });
-    const distinctDays = daysSet.size;
 
-    // Push a clean local-only notification (no server ID)
-    appData.notifications.push({
-      id: "local_" + libId, // stable local ID, will be replaced later
-      message: `⚠️ ${lib.name} missed ${totalMissed} duties across ${distinctDays} day(s)`,
-      type: "cumulative_all",
-      librarian_id: libId,
-      date: getToday(),
-      is_read: false,
-      is_forgotten: false,
-      is_dismissed: false,
-    });
+    for (const [libId, records] of Object.entries(grouped)) {
+      const lib = getLib(libId);
+      if (!lib) continue;
+
+      const totalMissed = records.length;
+      const daysSet = new Set();
+      records.forEach((att) => {
+        const instance = appData.duty_instances.find(
+          (di) => di.id === att.duty_instance_id
+        );
+        if (instance) daysSet.add(instance.date);
+      });
+      const distinctDays = daysSet.size;
+
+      // Use a stable local ID (no server dependency)
+      newCumulative.push({
+        id: "local_" + libId,
+        message: `⚠️ ${lib.name} missed ${totalMissed} duties across ${distinctDays} day(s)`,
+        type: "cumulative_all",
+        librarian_id: libId,
+        date: getToday(),
+        is_read: false,
+        is_forgotten: false,
+        is_dismissed: false,
+      });
+    }
   }
+
+  // Replace the entire notifications array with local data
+  appData.notifications = [...otherNotifs, ...newCumulative];
 }
 
 async function renderNotifications() {
-  // Always sync from current attendance before rendering (no server needed)
-  syncLocalNotifications();
+  // The list is already up-to-date because syncLocalNotifications was called.
+  // We just filter and display what's in appData.notifications.
 
   let notifs = appData.notifications;
   if (showDismissed) {
@@ -5412,50 +5389,62 @@ function renderDuties() {
     .join("");
 }
 
-async function markAttendedFromNotification(recordId, btn) {
-  if (btn && btn.disabled) return;
+function syncLocalNotifications() {
+  // Build the entire local notification list from the current attendance state
+  const missedRecords = appData.attendance.filter((a) => {
+    if (a.attended || a.forgiven || a.punishment_issued) return false;
+    const instance = appData.duty_instances.find(
+      (di) => di.id === a.duty_instance_id
+    );
+    return instance !== undefined;
+  });
 
-  if (btn) {
-    btn.disabled = true;
-    btn.innerHTML = "⏳";
-  }
+  // Keep any non‑cumulative notifications (dismissed ones, old types, etc.)
+  const otherNotifs = appData.notifications.filter(
+    (n) => n.type !== "cumulative_all"
+  );
 
-  const attendanceRecord = appData.attendance.find((a) => a.id === recordId);
-  const libId = attendanceRecord ? attendanceRecord.librarian_id : null;
+  const newCumulative = [];
 
-  // Optimistic: remove the row in the popup immediately
-  if (libId) {
-    buildNotificationPopupExcluding(libId, recordId);
-  }
+  if (missedRecords.length > 0) {
+    const grouped = {};
+    missedRecords.forEach((att) => {
+      const libId = att.librarian_id;
+      if (!grouped[libId]) grouped[libId] = [];
+      grouped[libId].push(att);
+    });
 
-  // Update the main list and badge instantly using local sync
-  syncLocalNotifications();
-  if (currentPage === "notifications") {
-    renderNotifications();
-  } else {
-    updateNotificationBadge();
-  }
+    for (const [libId, records] of Object.entries(grouped)) {
+      const lib = getLib(libId);
+      if (!lib) continue;
 
-  // Fire-and-forget server task (does not change the UI optimistically)
-  (async () => {
-    try {
-      await forgiveAttendanceRecord(recordId);
-      await generateMissedNotifications(); // updates server
-      // After server confirms, we can re-sync to replace local IDs with real ones
-      // but the UI already shows the correct state.
-      syncLocalNotifications();
-      if (currentPage === "notifications") renderNotifications();
-      else updateNotificationBadge();
-    } catch (err) {
-      console.error(err);
-      toast("Failed to mark as attended – reverted.");
-      // Revert to previous state
-      syncLocalNotifications();
-      renderNotifications();
+      const totalMissed = records.length;
+      const daysSet = new Set();
+      records.forEach((att) => {
+        const instance = appData.duty_instances.find(
+          (di) => di.id === att.duty_instance_id
+        );
+        if (instance) daysSet.add(instance.date);
+      });
+      const distinctDays = daysSet.size;
+
+      // Use a stable local ID (no server dependency)
+      newCumulative.push({
+        id: "local_" + libId,
+        message: `⚠️ ${lib.name} missed ${totalMissed} duties across ${distinctDays} day(s)`,
+        type: "cumulative_all",
+        librarian_id: libId,
+        date: getToday(),
+        is_read: false,
+        is_forgotten: false,
+        is_dismissed: false,
+      });
     }
-  })();
-}
+  }
 
+  // Replace the entire notifications array with local data
+  appData.notifications = [...otherNotifs, ...newCumulative];
+}
 function showDutyActions(dutyId) {
   const duty = appData.duties.find((d) => d.id === dutyId);
   if (!duty) return;
@@ -5657,6 +5646,49 @@ async function createDuty() {
     toast("Error creating duty – rolled back.");
     console.error(err);
   }
+}
+
+async function markAttendedFromNotification(recordId, btn) {
+  if (btn && btn.disabled) return;
+
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = "⏳";
+  }
+
+  const attendanceRecord = appData.attendance.find((a) => a.id === recordId);
+  const libId = attendanceRecord ? attendanceRecord.librarian_id : null;
+
+  // Optimistic: remove the row in the popup immediately
+  if (libId) {
+    buildNotificationPopupExcluding(libId, recordId);
+  }
+
+  // Update the main list and badge instantly using local sync
+  syncLocalNotifications();
+  if (currentPage === "notifications") {
+    renderNotifications();
+  } else {
+    updateNotificationBadge();
+  }
+
+  // Fire-and-forget server task (does not change the UI optimistically)
+  (async () => {
+    try {
+      await forgiveAttendanceRecord(recordId);
+      await generateMissedNotifications(); // updates server only
+      // After server confirms, sync local again just to be safe
+      syncLocalNotifications();
+      if (currentPage === "notifications") renderNotifications();
+      else updateNotificationBadge();
+    } catch (err) {
+      console.error(err);
+      toast("Failed to mark as attended – reverted.");
+      // Revert to previous state
+      syncLocalNotifications();
+      renderNotifications();
+    }
+  })();
 }
 
 // Helper: check if a duty occurs on a given date (reuse logic from generateDutyInstancesForDate)
