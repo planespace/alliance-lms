@@ -8,7 +8,19 @@ const Tag = require("../models/Tag");
 // GET all tags
 router.get("/", async (req, res) => {
   try {
-    const tags = await Tag.find({ is_active: true });
+    const tags = await Tag.find(
+      { is_active: true },
+      {
+        name: 1,
+        description: 1,
+        type: 1,
+        librarian_id: 1,
+        start_date: 1,
+        end_date: 1,
+        is_active: 1,
+        duty_id: 1,
+      }
+    ).lean();
     res.json(tags);
   } catch (err) {
     res.status(500).json({ error: err.message });

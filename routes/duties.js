@@ -9,7 +9,22 @@ const DutyInstance = require("../models/DutyInstance");
 // GET all duties
 router.get("/", async (req, res) => {
   try {
-    const duties = await Duty.find({});
+    const duties = await Duty.find(
+      {},
+      {
+        name: 1,
+        start_time: 1,
+        end_time: 1,
+        days: 1,
+        recurrence_type: 1,
+        specific_dates: 1,
+        recurrence_interval: 1,
+        end_date: 1,
+        is_punishment: 1,
+        sector_id: 1,
+        created_at: 1,
+      }
+    ).lean();
     res.json(duties);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -19,7 +34,10 @@ router.get("/", async (req, res) => {
 // GET all duty instances
 router.get("/instances", async (req, res) => {
   try {
-    const instances = await DutyInstance.find({});
+    const instances = await DutyInstance.find(
+      {},
+      { duty_id: 1, date: 1, is_active: 1 }
+    ).lean();
     res.json(instances);
   } catch (err) {
     res.status(500).json({ error: err.message });

@@ -8,7 +8,10 @@ const { Captain, Committee } = require("../models/HallOfFame");
 // CAPTAINS
 router.get("/captains", async (req, res) => {
   try {
-    const captains = await Captain.find({});
+    const captains = await Captain.find(
+      {},
+      { name: 1, adm_no: 1, year: 1, house: 1, photo_url: 1 }
+    ).lean();
     res.json(captains);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -48,7 +51,7 @@ router.delete("/captains/:id", async (req, res) => {
 // COMMITTEES
 router.get("/committees", async (req, res) => {
   try {
-    const committees = await Committee.find({});
+    const committees = await Committee.find({}, { year: 1, members: 1 }).lean();
     res.json(committees);
   } catch (err) {
     res.status(500).json({ error: err.message });

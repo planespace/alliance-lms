@@ -8,7 +8,18 @@ const Librarian = require("../models/Librarian");
 // GET all active librarians
 router.get("/", async (req, res) => {
   try {
-    const librarians = await Librarian.find({ is_deleted: false });
+    const librarians = await Librarian.find(
+      { is_deleted: false },
+      {
+        name: 1,
+        grade: 1,
+        adm_no: 1,
+        date_joined: 1,
+        house: 1,
+        is_deleted: 1,
+        created_at: 1,
+      }
+    ).lean();
     res.json(librarians);
   } catch (err) {
     res.status(500).json({ error: err.message });

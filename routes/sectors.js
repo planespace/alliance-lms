@@ -8,7 +8,18 @@ const Sector = require("../models/Sector");
 // GET all sectors
 router.get("/", async (req, res) => {
   try {
-    const sectors = await Sector.find({});
+    const sectors = await Sector.find(
+      {},
+      {
+        name: 1,
+        parent_id: 1,
+        is_leaf: 1,
+        min_people: 1,
+        description: 1,
+        leader_ids: 1,
+        duty_settings_list: 1,
+      }
+    ).lean();
     res.json(sectors);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -54,7 +65,10 @@ const Assignment = require("../models/SectorAssignment");
 
 router.get("/assignments", async (req, res) => {
   try {
-    const assignments = await Assignment.find({});
+    const assignments = await Assignment.find(
+      {},
+      { sector_id: 1, librarian_id: 1, assigned_at: 1 }
+    ).lean();
     res.json(assignments);
   } catch (err) {
     res.status(500).json({ error: err.message });

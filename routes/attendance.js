@@ -8,7 +8,18 @@ const Attendance = require("../models/Attendance");
 // GET all attendance records
 router.get("/", async (req, res) => {
   try {
-    const records = await Attendance.find({});
+    const records = await Attendance.find(
+      {},
+      {
+        duty_instance_id: 1,
+        librarian_id: 1,
+        attended: 1,
+        confirmed_by: 1,
+        confirmed_at: 1,
+        forgiven: 1,
+        punishment_issued: 1,
+      }
+    ).lean();
     res.json(records);
   } catch (err) {
     res.status(500).json({ error: err.message });

@@ -8,7 +8,22 @@ const Notification = require("../models/Notification");
 // GET all notifications
 router.get("/", async (req, res) => {
   try {
-    const notifs = await Notification.find({});
+    const notifs = await Notification.find(
+      {},
+      {
+        message: 1,
+        type: 1,
+        librarian_id: 1,
+        duty_instance_id: 1,
+        tag_id: 1,
+        date: 1,
+        is_read: 1,
+        is_forgotten: 1,
+        is_dismissed: 1,
+        forgotten_at: 1,
+        dismiss_until: 1,
+      }
+    ).lean();
     res.json(notifs);
   } catch (err) {
     res.status(500).json({ error: err.message });
