@@ -3324,7 +3324,8 @@ async function generateMissedNotifications() {
   saveData();
 }
 async function renderNotifications() {
-  await generateMissedNotifications();
+  // The background sync already keeps notifications up‑to‑date.
+  // We only filter and display what is currently in appData.
 
   let notifs = appData.notifications;
   if (showDismissed) {
