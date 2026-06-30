@@ -142,7 +142,7 @@ async function startBackgroundSync() {
     await generateMissedNotifications();
 
     // Re‑render the current page so everything is up to date
-    renderCurrentPage();
+
     updateDutyBadge();
   } catch (err) {
     console.error("Background sync failed", err);
@@ -5334,20 +5334,18 @@ async function markAttendedFromNotification(recordId, btn) {
   if (attendanceMarkingInProgress) return;
   attendanceMarkingInProgress = true;
 
-  if (btn) {
-    btn.disabled = true;
-    btn.innerHTML = "⏳ Saving...";
+  // 1. Optimistically update the UI – remove the clicked row
+  const attendanceRecord = appData.attendance.find((a) => a.id === recordId);
+  const libId = attendanceRecord ? attendanceRecord.librarian_id : null;
+
+  if (libId) {
+    // Build a new popup that already excludes this record (optimistic)
+    buildNotificationPopupExcluding(libId, recordId);
   }
 
+  // 2. Now do the server work in the background
   try {
-    // Remember the librarian before the save
-    const attendanceRecord = appData.attendance.find((a) => a.id === recordId);
-    const libId = attendanceRecord ? attendanceRecord.librarian_id : null;
-
-    // 1. Save the attendance
     await forgiveAttendanceRecord(recordId);
-
-    // 2. Update the notification list (so the main page reflects the change)
     await generateMissedNotifications();
     if (currentPage === "notifications") {
       renderNotifications();
@@ -5355,19 +5353,17 @@ async function markAttendedFromNotification(recordId, btn) {
       updateNotificationBadge();
     }
 
-    // 3. Rebuild the notification popup directly for this librarian
+    // 3. After the save, rebuild the popup with the real updated data
     if (libId) {
-      rebuildNotificationPopup(libId);
+      rebuildNotificationPopup(libId); // same function you already have
     } else {
       closeModal("notificationActionModal");
     }
   } catch (err) {
     console.error(err);
-    toast("Failed to mark as attended.");
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = "✅ Mark Attended";
-    }
+    toast("Failed to mark as attended – reverted.");
+    // Revert the popup to the real current state
+    if (libId) rebuildNotificationPopup(libId);
   } finally {
     attendanceMarkingInProgress = false;
   }
@@ -5928,6 +5924,84 @@ function handleImageUpload(file, previewImgId, urlInputId) {
     img.src = e.target.result;
   };
   reader.readAsDataURL(file);
+}
+
+function buildNotificationPopupExcluding(libId, excludeRecordId) {
+  const lib = getLib(libId);
+  if (!lib) {
+    closeModal("notificationActionModal");
+    return;
+  }
+
+  const missedRecords = appData.attendance.filter((a) => {
+    if (a.librarian_id !== libId) return false;
+    if (a.attended || a.forgiven || a.punishment_issued) return false;
+    if (a.id === excludeRecordId) return false; // optimistic exclusion
+    const instance = appData.duty_instances.find(
+      (di) => di.id === a.duty_instance_id
+    );
+    return instance !== undefined;
+  });
+
+  const content = document.getElementById("notificationActionContent");
+  if (!content) return;
+
+  if (missedRecords.length === 0) {
+    content.innerHTML = `
+      <div style="text-align:center; padding:30px;">
+        <h4 style="color:var(--success);">✅ All duties are now marked as attended.</h4>
+        <p style="margin-top:10px;">Great job!</p>
+        <button class="btn btn-secondary" onclick="closeModal('notificationActionModal')">Close</button>
+      </div>`;
+    return;
+  }
+
+  const grouped = {};
+  missedRecords.forEach((rec) => {
+    const instance = appData.duty_instances.find(
+      (di) => di.id === rec.duty_instance_id
+    );
+    if (!instance) return;
+    const date = instance.date;
+    if (!grouped[date]) grouped[date] = [];
+    grouped[date].push({ rec, instance });
+  });
+
+  const sortedDates = Object.keys(grouped).sort((a, b) => b.localeCompare(a));
+
+  let html = `
+    <div style="margin-bottom:20px;">
+      <h4 style="margin:0 0 4px 0;">⚠️ ${lib.name} has missed duties</h4>
+      <p style="margin:0; font-size:13px; color:var(--text-secondary);">Librarian: ${lib.name}</p>
+    </div>
+    <div style="border:1px solid var(--border); border-radius:8px;">
+      <table class="notif-detail-table">
+        <thead>
+          <tr><th>Date</th><th>Duty</th><th>Time</th><th style="text-align:center;">Action</th></tr>
+        </thead>
+        <tbody>`;
+
+  sortedDates.forEach((date) => {
+    const records = grouped[date];
+    records.forEach(({ rec, instance }, idx) => {
+      const duty = appData.duties.find((d) => d.id === instance.duty_id);
+      if (!duty) return;
+      html += `
+        <tr>
+          <td>${idx === 0 ? formatDateFull(date) : ""}</td>
+          <td><strong>${duty.name}</strong></td>
+          <td>${formatTime(duty.start_time)} – ${formatTime(duty.end_time)}</td>
+          <td style="text-align:center;">
+            <button class="btn btn-success btn-sm" onclick="markAttendedFromNotification('${
+              rec.id
+            }', this)">✅ Mark Attended</button>
+          </td>
+        </tr>`;
+    });
+  });
+
+  html += `</tbody></table></div>`;
+  content.innerHTML = html;
 }
 
 function rebuildNotificationPopup(libId) {
