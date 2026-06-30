@@ -5334,38 +5334,42 @@ async function markAttendedFromNotification(recordId, btn) {
   if (attendanceMarkingInProgress) return;
   attendanceMarkingInProgress = true;
 
-  // 1. Optimistically update the UI – remove the clicked row
+  // 1. Immediately disable the button and show a very brief "Saving..."
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = "⏳";
+  }
+
+  // 2. Find the librarian ID before we change anything
   const attendanceRecord = appData.attendance.find((a) => a.id === recordId);
   const libId = attendanceRecord ? attendanceRecord.librarian_id : null;
 
+  // 3. Optimistically remove the row from the popup RIGHT NOW
   if (libId) {
-    // Build a new popup that already excludes this record (optimistic)
     buildNotificationPopupExcluding(libId, recordId);
   }
 
-  // 2. Now do the server work in the background
+  // 4. Do the server work in the background (don’t block the UI)
   try {
-    await forgiveAttendanceRecord(recordId);
-    await generateMissedNotifications();
+    await forgiveAttendanceRecord(recordId); // just saves the record
+    await generateMissedNotifications(); // updates the list
     if (currentPage === "notifications") {
-      renderNotifications();
+      renderNotifications(); // refresh the main list
     } else {
       updateNotificationBadge();
     }
-
-    // 3. After the save, rebuild the popup with the real updated data
-    if (libId) {
-      rebuildNotificationPopup(libId); // same function you already have
-    } else {
-      closeModal("notificationActionModal");
-    }
   } catch (err) {
     console.error(err);
-    toast("Failed to mark as attended – reverted.");
-    // Revert the popup to the real current state
-    if (libId) rebuildNotificationPopup(libId);
+    toast("Failed to mark as attended.");
   } finally {
     attendanceMarkingInProgress = false;
+  }
+
+  // 5. After the server work, rebuild the popup with the real data
+  if (libId) {
+    rebuildNotificationPopup(libId);
+  } else {
+    closeModal("notificationActionModal");
   }
 }
 
@@ -5936,7 +5940,7 @@ function buildNotificationPopupExcluding(libId, excludeRecordId) {
   const missedRecords = appData.attendance.filter((a) => {
     if (a.librarian_id !== libId) return false;
     if (a.attended || a.forgiven || a.punishment_issued) return false;
-    if (a.id === excludeRecordId) return false; // optimistic exclusion
+    if (a.id === excludeRecordId) return false; // <-- removes the clicked row instantly
     const instance = appData.duty_instances.find(
       (di) => di.id === a.duty_instance_id
     );
@@ -6033,7 +6037,6 @@ function rebuildNotificationPopup(libId) {
     return;
   }
 
-  // Build the table of missed duties (no inner scroll)
   const grouped = {};
   missedRecords.forEach((rec) => {
     const instance = appData.duty_instances.find(
@@ -6079,7 +6082,6 @@ function rebuildNotificationPopup(libId) {
   });
 
   html += `</tbody></table></div>`;
-
   content.innerHTML = html;
 }
 
