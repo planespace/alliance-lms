@@ -35,25 +35,37 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
-  // For the API data endpoint, use stale-while-revalidate
+  // Handle the API data endpoint – cache-first, then background refresh
   if (url.pathname === "/api/all") {
     event.respondWith(
       caches.open(CACHE_NAME).then((cache) =>
         cache.match(event.request).then((cachedResponse) => {
-          const networkFetch = fetch(event.request).then((networkResponse) => {
-            // Cache the fresh response (clone it because response can only be consumed once)
-            cache.put(event.request, networkResponse.clone());
-            return networkResponse;
-          });
-          // Return cached response immediately if exists, otherwise wait for network
-          return cachedResponse || networkFetch;
+          // Revalidate in background
+          const networkFetch = fetch(event.request)
+            .then((networkResponse) => {
+              cache.put(event.request, networkResponse.clone());
+              console.log("✅ Service Worker – fresh /api/all cached");
+              return networkResponse;
+            })
+            .catch(() =>
+              console.warn(
+                "⚠️ Service Worker – network fetch failed, using cache"
+              )
+            );
+
+          if (cachedResponse) {
+            console.log("⚡ Service Worker – serving /api/all from cache");
+            return cachedResponse;
+          }
+          console.log("⏳ Service Worker – no cache, waiting for network");
+          return networkFetch;
         })
       )
     );
     return;
   }
 
-  // For all other requests (static files, etc.), cache-first with network fallback
+  // All other requests – cache-first with network fallback
   event.respondWith(
     caches
       .match(event.request)

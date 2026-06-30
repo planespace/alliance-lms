@@ -75,6 +75,7 @@ app.use("/api/halloffame", halloffameRouter);
 // Combined endpoint – returns only necessary fields for speed
 app.get("/api/all", protect, async (req, res) => {
   try {
+    res.set("Cache-Control", "private, max-age=120");
     const [
       librarians,
       sectors,
