@@ -1021,6 +1021,12 @@ function renderDashboard() {
   renderDashboardTable();
 }
 
+let sectorSearchTimer;
+function debounceRenderSectors() {
+  clearTimeout(sectorSearchTimer);
+  sectorSearchTimer = setTimeout(renderSectors, 200);
+}
+
 function debounceRenderDashboard() {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(renderDashboardTable, 200);
@@ -5944,6 +5950,18 @@ function rebuildNotificationPopup(libId) {
   html += `</tbody></table></div>`;
 
   content.innerHTML = html;
+}
+
+// ============================================
+// SERVICE WORKER REGISTRATION (instant offline)
+// ============================================
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker
+      .register("/sw.js")
+      .then((reg) => console.log("Service Worker registered!", reg.scope))
+      .catch((err) => console.log("Service Worker registration failed:", err));
+  });
 }
 
 // ----- Initial load -----
