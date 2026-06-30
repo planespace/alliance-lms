@@ -5331,8 +5331,8 @@ function renderDuties() {
 }
 
 async function markAttendedFromNotification(recordId, btn) {
-  if (attendanceMarkingInProgress) return;
-  attendanceMarkingInProgress = true;
+  // Prevent double‑click on the *same* button only
+  if (btn && btn.disabled) return;
 
   if (btn) {
     btn.disabled = true;
@@ -5342,14 +5342,12 @@ async function markAttendedFromNotification(recordId, btn) {
   const attendanceRecord = appData.attendance.find((a) => a.id === recordId);
   const libId = attendanceRecord ? attendanceRecord.librarian_id : null;
 
-  // 1. Optimistically remove the row from the popup
+  // ── 1. Optimistic UI updates (instant) ──
   if (libId) {
+    // Remove the clicked row from the popup (or close it if none left)
     buildNotificationPopupExcluding(libId, recordId);
-  }
 
-  // 2. Optimistically update the main notification list AND badge RIGHT NOW
-  if (libId) {
-    // Count how many missed duties this librarian has (excluding the one being marked)
+    // Update the main notification list and badge instantly
     const missedAfter = appData.attendance.filter(
       (a) =>
         a.librarian_id === libId &&
@@ -5359,45 +5357,38 @@ async function markAttendedFromNotification(recordId, btn) {
         a.id !== recordId
     ).length;
 
-    // Remove or update the cumulative notification for this librarian
     appData.notifications = appData.notifications.filter((n) => {
       if (n.type === "cumulative_all" && n.librarian_id === libId) {
-        if (missedAfter === 0) return false; // delete it
-        // Update the message
+        if (missedAfter === 0) return false;
         n.message = `⚠️ ${getLib(libId).name} missed ${missedAfter} duty(ies)`;
       }
       return true;
     });
 
-    // If no more missed duties, close the popup; otherwise it's already refreshed
     if (missedAfter === 0) {
       closeModal("notificationActionModal");
     }
   }
 
-  // 3. Refresh the main notification list and badge instantly
-  renderNotifications(); // this now uses the locally updated data
+  renderNotifications(); // instantly refreshes the list and badge
 
-  // 4. Do the server work in the background
-  try {
-    await forgiveAttendanceRecord(recordId);
-    await generateMissedNotifications();
+  // ── 2. Fire‑and‑forget background server task ──
+  (async () => {
+    try {
+      await forgiveAttendanceRecord(recordId);
+      await generateMissedNotifications();
 
-    // After server confirms, refresh again to be 100% in sync
-    if (currentPage === "notifications") {
+      // Refresh the UI one more time after server confirmation
+      if (currentPage === "notifications") renderNotifications();
+      else updateNotificationBadge();
+    } catch (err) {
+      console.error(err);
+      toast("Failed to mark as attended – reverted.");
+      // Revert: force a full regeneration
+      await generateMissedNotifications();
       renderNotifications();
-    } else {
-      updateNotificationBadge();
     }
-  } catch (err) {
-    console.error(err);
-    toast("Failed to mark as attended.");
-    // Revert optimistic changes – force a full regeneration
-    await generateMissedNotifications();
-    renderNotifications();
-  } finally {
-    attendanceMarkingInProgress = false;
-  }
+  })();
 }
 
 function showDutyActions(dutyId) {
@@ -6049,7 +6040,6 @@ function rebuildNotificationPopup(libId) {
   const content = document.getElementById("notificationActionContent");
   if (!content) return;
 
-  // Auto‑close when no more missed duties remain
   if (missedRecords.length === 0) {
     closeModal("notificationActionModal");
     return;
