@@ -26,6 +26,7 @@ let appData = {
     cumulativeMissedDutiesThreshold: 3,
   },
 };
+let generatingMissedNotifications = false;
 let pendingAttendanceSaves = new Map();
 let attendanceBatchTimer = null;
 let removingInProgress = false;
@@ -3002,6 +3003,10 @@ async function saveAttendance() {
     saveData();
     renderAttendance();
     renderNotifications();
+    syncLocalNotifications();
+    if (currentPage === "notifications") {
+      renderNotifications();
+    }
     toast(`Saved ${saved} records.`);
   } else toast("No changes.");
 }
@@ -3011,7 +3016,6 @@ async function selectAllAttendance(instId, attended) {
     (a) => a.duty_instance_id === instId
   );
 
-  // ---- 1. Instant UI update ----
   records.forEach((r) => {
     r.attended = attended;
     r.forgiven = false;
@@ -3021,12 +3025,15 @@ async function selectAllAttendance(instId, attended) {
 
   renderAttendance();
   updateDutyBadge();
+  syncLocalNotifications();
+  if (currentPage === "notifications") {
+    renderNotifications();
+  }
+
   toast(`All marked ${attended ? "present" : "absent"}.`);
 
-  // ---- 2. Add all to batch ----
   records.forEach((r) => pendingAttendanceSaves.set(r.id, r));
 
-  // ---- 3. Start / reset debounce ----
   if (attendanceBatchTimer) clearTimeout(attendanceBatchTimer);
   attendanceBatchTimer = setTimeout(flushAttendanceSaves, 300);
 }
@@ -3054,7 +3061,6 @@ async function toggleSingleAttendance(recordId, checkbox) {
 
   const newChecked = checkbox.checked;
 
-  // ---- 1. Instant UI update ----
   const label = checkbox.closest("label");
   if (label) {
     label.className = `person-check ${newChecked ? "present" : "absent"}`;
@@ -3066,11 +3072,13 @@ async function toggleSingleAttendance(recordId, checkbox) {
 
   updateNotificationBadge();
   updateDutyBadge();
+  syncLocalNotifications();
+  if (currentPage === "notifications") {
+    renderNotifications(); // ★ instantly refresh the notification page
+  }
 
-  // ---- 2. Add to batch (replaces any previous pending save for this record) ----
   pendingAttendanceSaves.set(recordId, rec);
 
-  // ---- 3. Start / reset the debounce timer ----
   if (attendanceBatchTimer) clearTimeout(attendanceBatchTimer);
   attendanceBatchTimer = setTimeout(flushAttendanceSaves, 300);
 
@@ -3195,6 +3203,10 @@ async function toggleAttendanceStatus(recId) {
   await saveEntity("attendance", rec, rec.id);
   await generateMissedNotifications();
   updateDutyBadge();
+  syncLocalNotifications();
+  if (currentPage === "notifications") {
+    renderNotifications();
+  }
   viewAttendanceHistory(rec.librarian_id);
   renderCurrentPage();
 }
@@ -3230,7 +3242,113 @@ async function addNotification(
 }
 
 async function generateMissedNotifications() {
-  // Collect currently missed records
+  if (generatingMissedNotifications) return;
+  generatingMissedNotifications = true;
+
+  try {
+    // ---------- YOUR EXISTING CODE BELOW (unchanged) ----------
+    const missedRecords = appData.attendance.filter((a) => {
+      if (a.attended || a.forgiven || a.punishment_issued) return false;
+      const instance = appData.duty_instances.find(
+        (di) => di.id === a.duty_instance_id
+      );
+      return instance !== undefined;
+    });
+
+    if (missedRecords.length > 0) {
+      const libIdsWithMissed = new Set(
+        missedRecords.map((a) => a.librarian_id)
+      );
+      const toDelete = appData.notifications.filter(
+        (n) =>
+          n.type === "cumulative_all" && libIdsWithMissed.has(n.librarian_id)
+      );
+      for (const n of toDelete) {
+        await deleteEntity("notifications", n.id, true);
+      }
+      appData.notifications = appData.notifications.filter(
+        (n) =>
+          !(n.type === "cumulative_all" && libIdsWithMissed.has(n.librarian_id))
+      );
+    }
+
+    const oldUndismissed = appData.notifications.filter(
+      (n) =>
+        (n.type === "missed_duty" ||
+          n.type === "cumulative_miss" ||
+          n.type === "cumulative_all") &&
+        !n.is_dismissed
+    );
+    for (const n of oldUndismissed) {
+      await deleteEntity("notifications", n.id, true);
+    }
+    appData.notifications = appData.notifications.filter(
+      (n) =>
+        !(
+          (n.type === "missed_duty" ||
+            n.type === "cumulative_miss" ||
+            n.type === "cumulative_all") &&
+          !n.is_dismissed
+        )
+    );
+
+    if (missedRecords.length === 0) {
+      saveData();
+      return;
+    }
+
+    const grouped = {};
+    missedRecords.forEach((att) => {
+      const libId = att.librarian_id;
+      if (!grouped[libId]) grouped[libId] = [];
+      grouped[libId].push(att);
+    });
+
+    for (const [libId, records] of Object.entries(grouped)) {
+      const lib = getLib(libId);
+      if (!lib) continue;
+
+      const totalMissed = records.length;
+      const daysSet = new Set();
+      records.forEach((att) => {
+        const instance = appData.duty_instances.find(
+          (di) => di.id === att.duty_instance_id
+        );
+        if (instance) daysSet.add(instance.date);
+      });
+      const distinctDays = daysSet.size;
+
+      const newNotif = {
+        message: `⚠️ ${lib.name} missed ${totalMissed} duties across ${distinctDays} day(s)`,
+        type: "cumulative_all",
+        librarian_id: libId,
+        duty_instance_id: null,
+        tag_id: null,
+        date: getToday(),
+        is_read: false,
+        is_forgotten: false,
+        is_dismissed: false,
+        forgotten_at: null,
+        dismiss_until: null,
+        created_at: new Date().toISOString(),
+      };
+
+      try {
+        const saved = await saveEntity("notifications", newNotif, null, true);
+        appData.notifications.push(saved);
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    saveData();
+  } finally {
+    generatingMissedNotifications = false;
+  }
+}
+
+function syncLocalNotifications() {
+  // For every librarian with missed duties, build a fresh cumulative notification
   const missedRecords = appData.attendance.filter((a) => {
     if (a.attended || a.forgiven || a.punishment_issued) return false;
     const instance = appData.duty_instances.find(
@@ -3239,51 +3357,13 @@ async function generateMissedNotifications() {
     return instance !== undefined;
   });
 
-  // 1️⃣ Delete ALL cumulative notifications for librarians who currently have missed records
-  if (missedRecords.length > 0) {
-    const libIdsWithMissed = new Set(missedRecords.map((a) => a.librarian_id));
-    const toDelete = appData.notifications.filter(
-      (n) => n.type === "cumulative_all" && libIdsWithMissed.has(n.librarian_id)
-    );
-    // Remove from server (silent)
-    for (const n of toDelete) {
-      await deleteEntity("notifications", n.id, true);
-    }
-    // Remove from local cache
-    appData.notifications = appData.notifications.filter(
-      (n) =>
-        !(n.type === "cumulative_all" && libIdsWithMissed.has(n.librarian_id))
-    );
-  }
-
-  // 2️⃣ Delete any remaining undismissed missed‑duty notifications (old ones)
-  const oldUndismissed = appData.notifications.filter(
-    (n) =>
-      (n.type === "missed_duty" ||
-        n.type === "cumulative_miss" ||
-        n.type === "cumulative_all") &&
-      !n.is_dismissed
-  );
-  for (const n of oldUndismissed) {
-    await deleteEntity("notifications", n.id, true);
-  }
+  // Remove all existing cumulative notifications (local only)
   appData.notifications = appData.notifications.filter(
-    (n) =>
-      !(
-        (n.type === "missed_duty" ||
-          n.type === "cumulative_miss" ||
-          n.type === "cumulative_all") &&
-        !n.is_dismissed
-      )
+    (n) => n.type !== "cumulative_all"
   );
 
-  // 3️⃣ If no missed records, stop
-  if (missedRecords.length === 0) {
-    saveData();
-    return;
-  }
+  if (missedRecords.length === 0) return;
 
-  // 4️⃣ Create fresh cumulative notifications for each librarian with misses
   const grouped = {};
   missedRecords.forEach((att) => {
     const libId = att.librarian_id;
@@ -3305,34 +3385,22 @@ async function generateMissedNotifications() {
     });
     const distinctDays = daysSet.size;
 
-    const newNotif = {
+    // Create a temporary notification object (no server ID needed for display)
+    appData.notifications.push({
+      id: "local_" + libId,
       message: `⚠️ ${lib.name} missed ${totalMissed} duties across ${distinctDays} day(s)`,
       type: "cumulative_all",
       librarian_id: libId,
-      duty_instance_id: null,
-      tag_id: null,
       date: getToday(),
       is_read: false,
       is_forgotten: false,
       is_dismissed: false,
-      forgotten_at: null,
-      dismiss_until: null,
-      created_at: new Date().toISOString(),
-    };
-
-    try {
-      const saved = await saveEntity("notifications", newNotif, null, true);
-      appData.notifications.push(saved);
-    } catch (e) {
-      console.error(e);
-    }
+    });
   }
-
-  saveData();
 }
+
 async function renderNotifications() {
-  // The background sync already keeps notifications up‑to‑date.
-  // We only filter and display what is currently in appData.
+  syncLocalNotifications();
 
   let notifs = appData.notifications;
   if (showDismissed) {
@@ -4448,9 +4516,12 @@ async function selectAllAttendanceTab(instanceId, sel) {
 
   renderAttendanceModal();
   updateDutyBadge();
+  syncLocalNotifications();
+  if (currentPage === "notifications") {
+    renderNotifications();
+  }
   toast(`All ${sel ? "present" : "absent"}.`);
 
-  // Flush immediately
   await flushAttendanceSaves();
 }
 async function saveAttendanceTab(instanceId) {
@@ -4458,7 +4529,6 @@ async function saveAttendanceTab(instanceId) {
     (a) => a.duty_instance_id === instanceId
   );
 
-  // Apply changes to local data and collect for batch
   document.querySelectorAll(".attendance-tab-check").forEach((cb) => {
     const rec = records.find((r) => r.id === cb.dataset.record);
     if (rec && rec.attended !== cb.checked) {
@@ -4470,13 +4540,14 @@ async function saveAttendanceTab(instanceId) {
     }
   });
 
-  // Instant re‑render of the modal
   renderAttendanceModal();
   updateDutyBadge();
+  syncLocalNotifications();
+  if (currentPage === "notifications") {
+    renderNotifications();
+  }
 
   toast("Saved.");
-
-  // Flush all pending saves immediately (since user clicked "Save")
   await flushAttendanceSaves();
 }
 
