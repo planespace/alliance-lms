@@ -76,38 +76,29 @@ function hideLoading() {
   bar.classList.remove("active"); // fades out
 }
 
-async function loadData() {
-  const headers = {};
-  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
-
-  // 1. If cached data exists, populate appData immediately (instant UI)
+function loadData() {
+  // Restore data from localStorage instantly (synchronous)
   const cached = localStorage.getItem("appDataCache");
   if (cached) {
     try {
       const parsed = JSON.parse(cached);
-      // Restore all collections from cache
-      appData.librarians = parsed.librarians || [];
-      appData.sectors = parsed.sectors || [];
-      appData.duties = parsed.duties || [];
-      appData.duty_instances = parsed.duty_instances || [];
-      appData.attendance = parsed.attendance || [];
-      appData.tags = parsed.tags || [];
-      appData.notifications = parsed.notifications || [];
-      appData.hall_of_fame_captains = parsed.hall_of_fame_captains || [];
-      appData.hall_of_fame_committees = parsed.hall_of_fame_committees || [];
-      appData.sector_assignments = parsed.sector_assignments || [];
+      Object.assign(appData, parsed);
     } catch (e) {
-      // ignore corrupt cache
+      /* ignore corrupt cache */
     }
   }
+}
 
-  // 2. Fetch fresh data from server in the background
+async function startBackgroundSync() {
+  const headers = {};
+  if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+
   try {
     const data = await fetch(`${API_BASE}/all`, { headers }).then((r) =>
       r.json()
     );
 
-    // Map _id to id and update appData
+    // Map _id to id (same mapping as before)
     const fresh = {
       librarians: (data.librarians || []).map((l) => ({ ...l, id: l._id })),
       sectors: (data.sectors || []).map((s) => ({ ...s, id: s._id })),
@@ -136,17 +127,14 @@ async function loadData() {
       })),
     };
 
-    // Update appData with fresh data (already rendered if cache existed)
     Object.assign(appData, fresh);
-
-    // Save to localStorage for next visit
     localStorage.setItem("appDataCache", JSON.stringify(fresh));
 
-    const storedSettings = localStorage.getItem("settings");
-    if (storedSettings) appData.settings = JSON.parse(storedSettings);
+    // Re-render the current page so the fresh data appears
+    renderCurrentPage();
+    updateDutyBadge();
   } catch (err) {
-    console.error("Failed to load data from API", err);
-    // If cached data was used, we are still fine – keep it
+    console.error("Background sync failed", err);
   }
 }
 
@@ -4273,26 +4261,46 @@ function toast(msg) {
 // INITIALIZATION
 // ============================================
 async function initApp() {
-  // 1. Immediately populate appData from cache if available, then start network fetch
-  loadData(); // we don't await here – it will restore cache instantly and then fetch
+  // 1. Instantly load cached data into appData (no waiting)
+  loadData();
 
-  // 2. Render the dashboard with whatever we have (cached data or empty)
-  await setViewDate(getToday());
+  // 2. Render the dashboard immediately with whatever we have
+  renderDashboard();
 
+  // 3. Set up the date navigator (dev mode) – no blocking
+  if (!devMode) {
+    document.getElementById("viewDate").max = getToday();
+  }
+
+  const dateNav = document.querySelector(".date-navigator");
+  if (dateNav) {
+    dateNav.style.display = devMode ? "flex" : "none";
+  }
+
+  // 4. Restore sector modal originals (unchanged)
   const sectorBody = document.querySelector("#sectorModal .modal-body");
   const sectorFooter = document.querySelector("#sectorModal .modal-footer");
   if (sectorBody) sectorModalOriginalBody = sectorBody.innerHTML;
   if (sectorFooter) sectorModalOriginalFooter = sectorFooter.innerHTML;
 
-  if (!devMode) {
-    document.getElementById("viewDate").max = getToday();
-  } else {
-    // dev mode – no max restriction
-  }
+  // 5. Start all slow work in the background (don’t block the UI)
+  startBackgroundSync(); // fetch fresh data
+  setViewDate(getToday()); // generates duty instances (no await – fire & forget)
+  generateMissedNotifications(); // clean up notifications
 
-  renderDashboard(); // uses whatever appData currently has
+  // 6. Periodic intervals (unchanged)
+  setInterval(async () => {
+    try {
+      if (currentPage === "notifications") renderNotifications();
+      await generateDutyInstancesForDate(getToday());
+      await cleanExpiredTags();
+      updateDutyBadge();
+    } catch (e) {
+      console.error(e);
+    }
+  }, 60000);
 
-  // … rest of intervals remain the same
+  setInterval(updateNotificationBadge, 15000);
 }
 
 async function renderAttendanceModal() {
