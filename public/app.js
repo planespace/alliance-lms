@@ -5620,13 +5620,10 @@ async function generateDutyInstancesForDate(date) {
       occurs = (duty.specific_dates || []).includes(date);
     } else if (duty.recurrence_type === "biweekly") {
       if (duty.days.includes(dayName)) {
-        // Normalise to dates only (no time component)
         const creationDate = new Date(duty.created_at);
         creationDate.setHours(0, 0, 0, 0);
         const currentDate = new Date(date);
         currentDate.setHours(0, 0, 0, 0);
-
-        // Find the first occurrence (first matching day on or after creation)
         const firstOccurrence = new Date(creationDate);
         while (
           firstOccurrence.toLocaleDateString("en-US", { weekday: "long" }) !==
@@ -5634,11 +5631,10 @@ async function generateDutyInstancesForDate(date) {
         ) {
           firstOccurrence.setDate(firstOccurrence.getDate() + 1);
         }
-
         const diffDays = Math.floor(
           (currentDate.getTime() - firstOccurrence.getTime()) / 86400000
         );
-        const intervalWeeks = duty.recurrence_interval || 1; // default 1
+        const intervalWeeks = duty.recurrence_interval || 1;
         if (diffDays >= 0 && diffDays % ((intervalWeeks + 1) * 7) === 0)
           occurs = true;
       }
@@ -5652,17 +5648,21 @@ async function generateDutyInstancesForDate(date) {
         (di) => di.duty_id === duty.id && di.date === date
       )
     ) {
-      // Save instance without id
       const newInst = {
         duty_id: duty.id,
         date,
         is_active: true,
         created_at: new Date().toISOString(),
       };
-      const savedInst = await saveEntity("duties/instances", newInst);
+      // ★ silent save – no loading bar
+      const savedInst = await saveEntity(
+        "duties/instances",
+        newInst,
+        null,
+        true
+      );
       appData.duty_instances.push(savedInst);
 
-      // Determine which librarians to assign
       let libIds = [];
       const templateInst = appData.duty_instances.find(
         (di) => di.duty_id === duty.id && di.id !== savedInst.id
@@ -5675,7 +5675,6 @@ async function generateDutyInstancesForDate(date) {
       } else if (duty.sector_id) {
         libIds = getSectorPeople(duty.sector_id).map((p) => p.id);
       }
-      // Save attendance records for each librarian
       for (const libId of libIds) {
         const att = {
           duty_instance_id: savedInst.id,
@@ -5686,7 +5685,8 @@ async function generateDutyInstancesForDate(date) {
           forgiven: false,
           punishment_issued: false,
         };
-        const savedAtt = await saveEntity("attendance", att);
+        // ★ silent save – no loading bar
+        const savedAtt = await saveEntity("attendance", att, null, true);
         appData.attendance.push(savedAtt);
       }
     }
