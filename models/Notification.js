@@ -18,4 +18,7 @@ const notificationSchema = new mongoose.Schema({
   created_at: { type: Date, default: Date.now },
 });
 
+notificationSchema.index({ type: 1, librarian_id: 1 });
+notificationSchema.index({ date: 1 });
+
 module.exports = mongoose.model("Notification", notificationSchema);

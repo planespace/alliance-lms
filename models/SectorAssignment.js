@@ -8,5 +8,5 @@ const assignmentSchema = new mongoose.Schema({
   librarian_id: String,
   assigned_at: { type: Date, default: Date.now },
 });
-
+assignmentSchema.index({ sector_id: 1, librarian_id: 1 }, { unique: true });
 module.exports = mongoose.model("SectorAssignment", assignmentSchema);

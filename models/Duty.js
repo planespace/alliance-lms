@@ -18,5 +18,5 @@ const dutySchema = new mongoose.Schema({
   created_at: { type: Date, default: Date.now },
   updated_at: { type: Date, default: Date.now },
 });
-
+dutySchema.index({ sector_id: 1 });
 module.exports = mongoose.model("Duty", dutySchema);

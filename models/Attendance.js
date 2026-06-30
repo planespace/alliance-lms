@@ -13,5 +13,10 @@ const attendanceSchema = new mongoose.Schema({
   punishment_issued: { type: Boolean, default: false },
   notes: String,
 });
-
+attendanceSchema.index({ duty_instance_id: 1 });
+attendanceSchema.index({ librarian_id: 1 });
+attendanceSchema.index(
+  { duty_instance_id: 1, librarian_id: 1 },
+  { unique: true }
+);
 module.exports = mongoose.model("Attendance", attendanceSchema);

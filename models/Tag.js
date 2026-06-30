@@ -17,4 +17,6 @@ const tagSchema = new mongoose.Schema({
   removed_at: Date,
 });
 
+tagSchema.index({ librarian_id: 1 });
+tagSchema.index({ type: 1, librarian_id: 1 });
 module.exports = mongoose.model("Tag", tagSchema);
