@@ -3348,7 +3348,8 @@ async function generateMissedNotifications() {
 }
 
 function syncLocalNotifications() {
-  // For every librarian with missed duties, build a fresh cumulative notification
+  // Completely rebuild cumulative notifications from current attendance data
+  // (no server IDs, no duplicates)
   const missedRecords = appData.attendance.filter((a) => {
     if (a.attended || a.forgiven || a.punishment_issued) return false;
     const instance = appData.duty_instances.find(
@@ -3357,7 +3358,7 @@ function syncLocalNotifications() {
     return instance !== undefined;
   });
 
-  // Remove all existing cumulative notifications (local only)
+  // Remove all existing cumulative notifications (both local and server)
   appData.notifications = appData.notifications.filter(
     (n) => n.type !== "cumulative_all"
   );
@@ -3385,9 +3386,9 @@ function syncLocalNotifications() {
     });
     const distinctDays = daysSet.size;
 
-    // Create a temporary notification object (no server ID needed for display)
+    // Push a clean local-only notification (no server ID)
     appData.notifications.push({
-      id: "local_" + libId,
+      id: "local_" + libId, // stable local ID, will be replaced later
       message: `⚠️ ${lib.name} missed ${totalMissed} duties across ${distinctDays} day(s)`,
       type: "cumulative_all",
       librarian_id: libId,
@@ -3400,6 +3401,7 @@ function syncLocalNotifications() {
 }
 
 async function renderNotifications() {
+  // Always sync from current attendance before rendering (no server needed)
   syncLocalNotifications();
 
   let notifs = appData.notifications;
@@ -5411,7 +5413,6 @@ function renderDuties() {
 }
 
 async function markAttendedFromNotification(recordId, btn) {
-  // Prevent double‑click on the *same* button only
   if (btn && btn.disabled) return;
 
   if (btn) {
@@ -5422,50 +5423,34 @@ async function markAttendedFromNotification(recordId, btn) {
   const attendanceRecord = appData.attendance.find((a) => a.id === recordId);
   const libId = attendanceRecord ? attendanceRecord.librarian_id : null;
 
-  // ── 1. Optimistic UI updates (instant) ──
+  // Optimistic: remove the row in the popup immediately
   if (libId) {
-    // Remove the clicked row from the popup (or close it if none left)
     buildNotificationPopupExcluding(libId, recordId);
-
-    // Update the main notification list and badge instantly
-    const missedAfter = appData.attendance.filter(
-      (a) =>
-        a.librarian_id === libId &&
-        !a.attended &&
-        !a.forgiven &&
-        !a.punishment_issued &&
-        a.id !== recordId
-    ).length;
-
-    appData.notifications = appData.notifications.filter((n) => {
-      if (n.type === "cumulative_all" && n.librarian_id === libId) {
-        if (missedAfter === 0) return false;
-        n.message = `⚠️ ${getLib(libId).name} missed ${missedAfter} duty(ies)`;
-      }
-      return true;
-    });
-
-    if (missedAfter === 0) {
-      closeModal("notificationActionModal");
-    }
   }
 
-  renderNotifications(); // instantly refreshes the list and badge
+  // Update the main list and badge instantly using local sync
+  syncLocalNotifications();
+  if (currentPage === "notifications") {
+    renderNotifications();
+  } else {
+    updateNotificationBadge();
+  }
 
-  // ── 2. Fire‑and‑forget background server task ──
+  // Fire-and-forget server task (does not change the UI optimistically)
   (async () => {
     try {
       await forgiveAttendanceRecord(recordId);
-      await generateMissedNotifications();
-
-      // Refresh the UI one more time after server confirmation
+      await generateMissedNotifications(); // updates server
+      // After server confirms, we can re-sync to replace local IDs with real ones
+      // but the UI already shows the correct state.
+      syncLocalNotifications();
       if (currentPage === "notifications") renderNotifications();
       else updateNotificationBadge();
     } catch (err) {
       console.error(err);
       toast("Failed to mark as attended – reverted.");
-      // Revert: force a full regeneration
-      await generateMissedNotifications();
+      // Revert to previous state
+      syncLocalNotifications();
       renderNotifications();
     }
   })();
