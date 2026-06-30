@@ -128,22 +128,24 @@ async function bulkAddLibrarians() {
   let added = 0,
     skipped = 0,
     duplicates = [];
-  const promises = [];
+  const tempLibs = []; // track temporary objects for rollback
+
+  // ---- 1. Create temporary librarians for instant UI ----
   for (const row of rows) {
     const name = row.querySelector(".bulk-name").value.trim();
     const grade = row.querySelector(".bulk-grade").value.trim();
     const adm = row.querySelector(".bulk-adm").value.trim();
     const joined = row.querySelector(".bulk-joined").value;
-    const house = row.querySelector(".bulk-house")
-      ? row.querySelector(".bulk-house").value.trim()
-      : "";
+    const house = row.querySelector(".bulk-house")?.value.trim() || "";
     if (!name || !grade || !adm || !joined) continue;
     if (appData.librarians.some((l) => l.adm_no === adm && !l.is_deleted)) {
       skipped++;
       duplicates.push(adm);
       continue;
     }
-    const newLib = {
+
+    const tempLib = {
+      id: "temp_" + Date.now() + Math.random(),
       name,
       grade,
       adm_no: adm,
@@ -151,22 +153,64 @@ async function bulkAddLibrarians() {
       house,
       is_deleted: false,
       created_at: new Date().toISOString(),
+      _temp: true,
+    };
+    appData.librarians.push(tempLib);
+    tempLibs.push({ tempLib, name, grade, adm, joined, house });
+  }
+
+  closeModal("bulkModal");
+  renderCurrentPage();
+  toast(`Adding ${tempLibs.length} librarians…`);
+
+  // ---- 2. Save to server in background ----
+  const promises = [];
+  for (const item of tempLibs) {
+    const newLib = {
+      name: item.name,
+      grade: item.grade,
+      adm_no: item.adm,
+      date_joined: item.joined,
+      house: item.house,
+      is_deleted: false,
+      created_at: new Date().toISOString(),
     };
     promises.push(
-      saveEntity("librarians", newLib).then((saved) =>
-        appData.librarians.push(saved)
-      )
+      saveEntity("librarians", newLib)
+        .then((saved) => ({ success: true, tempId: item.tempLib.id, saved }))
+        .catch((err) => ({
+          success: false,
+          tempId: item.tempLib.id,
+          error: err,
+        }))
     );
-    added++;
   }
-  await Promise.all(promises);
-  closeModal("bulkModal");
+
+  const results = await Promise.all(promises);
+  let finalAdded = 0;
+  results.forEach((res) => {
+    if (res.success) {
+      // Replace temp with real
+      const idx = appData.librarians.findIndex((l) => l.id === res.tempId);
+      if (idx !== -1) {
+        appData.librarians[idx] = { ...res.saved, id: res.saved._id };
+      }
+      finalAdded++;
+    } else {
+      // Remove failed temp
+      appData.librarians = appData.librarians.filter(
+        (l) => l.id !== res.tempId
+      );
+      console.error("Failed to add librarian", res.error);
+    }
+  });
+
+  renderCurrentPage();
   toast(
-    `Added ${added}${
+    `Added ${finalAdded}${
       skipped ? `, skipped ${skipped} (${duplicates.join(", ")})` : ""
     }`
   );
-  renderCurrentPage();
 }
 
 async function saveEntity(type, data, id = null, skipLoading = false) {
@@ -1083,6 +1127,7 @@ async function addLibrarian() {
   const adm = document.getElementById("libAdm").value.trim();
   const joined = document.getElementById("libJoined").value;
   const house = document.getElementById("libHouse").value.trim() || "";
+
   if (!name || !grade || !adm || !joined) {
     Swal.fire("Error", "All fields required.", "error");
     return;
@@ -1091,7 +1136,11 @@ async function addLibrarian() {
     Swal.fire("Error", "Admission number already exists!", "error");
     return;
   }
-  const newLib = {
+
+  // ---- Create a temporary librarian object for instant UI ----
+  const tempId = "temp_" + Date.now();
+  const tempLib = {
+    id: tempId,
     name,
     grade,
     adm_no: adm,
@@ -1099,15 +1148,54 @@ async function addLibrarian() {
     house,
     is_deleted: false,
     created_at: new Date().toISOString(),
+    _temp: true, // marker so we can identify the pending row
   };
-  const saved = await saveEntity("librarians", newLib);
-  appData.librarians.push(saved);
+
+  // Add to local cache instantly
+  appData.librarians.push(tempLib);
+
+  // Close modal and reset inputs immediately
   closeModal("librarianModal");
   ["libName", "libGrade", "libAdm", "libJoined", "libHouse"].forEach(
     (id) => (document.getElementById(id).value = "")
   );
+
+  // Re‑render the dashboard table instantly (the new row appears with a subtle indicator)
   renderCurrentPage();
-  toast("Librarian added.");
+  toast("Adding librarian…");
+
+  try {
+    // Save to server in background
+    const newLib = {
+      name,
+      grade,
+      adm_no: adm,
+      date_joined: joined,
+      house,
+      is_deleted: false,
+      created_at: new Date().toISOString(),
+    };
+    const saved = await saveEntity("librarians", newLib);
+
+    // Replace the temporary object with the real one
+    const idx = appData.librarians.findIndex((l) => l.id === tempId);
+    if (idx !== -1) {
+      appData.librarians[idx] = { ...saved, id: saved._id }; // replace
+    } else {
+      // fallback if race condition
+      appData.librarians.push({ ...saved, id: saved._id });
+    }
+
+    // Re‑render again to update the row with real data and remove any temp indicator
+    renderCurrentPage();
+    toast("Librarian added.");
+  } catch (err) {
+    // Remove the temporary entry on failure
+    appData.librarians = appData.librarians.filter((l) => l.id !== tempId);
+    renderCurrentPage();
+    toast("Error adding librarian – rolled back.");
+    console.error(err);
+  }
 }
 async function deleteLibrarian(id) {
   const lib = getLib(id);
@@ -1276,6 +1364,7 @@ async function addCaptain() {
   }
 
   if (window._editingCaptainId) {
+    // Editing existing – this is a save, not an add; we skip optimistic for edit for now.
     const captain = appData.hall_of_fame_captains.find(
       (c) => c.id === window._editingCaptainId
     );
@@ -1289,17 +1378,60 @@ async function addCaptain() {
     }
     window._editingCaptainId = null;
   } else {
-    const newCaptain = {
+    // ---- Add new captain optimistically ----
+    const tempId = "temp_" + Date.now();
+    const tempCaptain = {
+      id: tempId,
       name,
       adm_no: adm,
       year,
       house,
       photo_url: photo,
       created_at: new Date().toISOString(),
+      _temp: true,
     };
-    const saved = await saveEntity("halloffame/captains", newCaptain);
-    appData.hall_of_fame_captains.push(saved);
+
+    appData.hall_of_fame_captains.push(tempCaptain);
+    closeModal("hallCaptainModal");
+    renderHallOfFame();
+    toast("Adding captain…");
+
+    try {
+      const newCaptain = {
+        name,
+        adm_no: adm,
+        year,
+        house,
+        photo_url: photo,
+        created_at: new Date().toISOString(),
+      };
+      const saved = await saveEntity("halloffame/captains", newCaptain);
+
+      // Replace temporary captain with the real one
+      const idx = appData.hall_of_fame_captains.findIndex(
+        (c) => c.id === tempId
+      );
+      if (idx !== -1) {
+        appData.hall_of_fame_captains[idx] = { ...saved, id: saved._id };
+      } else {
+        appData.hall_of_fame_captains.push({ ...saved, id: saved._id });
+      }
+
+      renderHallOfFame();
+      toast("Captain saved.");
+      return; // success, skip the final block
+    } catch (err) {
+      appData.hall_of_fame_captains = appData.hall_of_fame_captains.filter(
+        (c) => c.id !== tempId
+      );
+      renderHallOfFame();
+      toast("Error adding captain – rolled back.");
+      console.error(err);
+      return;
+    }
   }
+
+  // If editing (the other branch)
   closeModal("hallCaptainModal");
   renderHallOfFame();
   toast("Captain saved.");
@@ -1413,6 +1545,7 @@ async function addTagFromModal() {
   const desc = document.getElementById("tagDescInput").value.trim();
   const type = document.getElementById("tagTypeSelect").value;
   const endDate = document.getElementById("tagEndDate").value || null;
+
   if (!name) {
     Swal.fire("Error", "Enter tag name.", "error");
     return;
@@ -1433,18 +1566,28 @@ async function addTagFromModal() {
       return;
     }
   }
-  if (selectedTagId) {
-    const tag = appData.tags.find((t) => t.id === selectedTagId);
-    if (tag) {
-      tag.name = name;
-      tag.description = desc || "No description";
-      tag.type = type;
-      tag.end_date = endDate;
-      tag.updated_at = new Date().toISOString();
-      await saveEntity("tags", tag, tag.id);
-    }
-    selectedTagId = null;
-  } else {
+
+  // ---- temporary tag for instant UI ----
+  const tempTag = {
+    id: "temp_" + Date.now(),
+    name,
+    description: desc || "No description",
+    type,
+    librarian_id: selectedLibrarianId,
+    start_date: getToday(),
+    end_date: endDate,
+    is_active: true,
+    duty_id: null,
+    created_at: new Date().toISOString(),
+    _temp: true,
+  };
+
+  appData.tags.push(tempTag);
+  closeModal("tagModal");
+  renderCurrentPage();
+  toast("Adding tag…");
+
+  try {
     const newTag = {
       name,
       description: desc || "No description",
@@ -1455,11 +1598,16 @@ async function addTagFromModal() {
       is_active: true,
       duty_id: null,
       created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      removed_at: null,
     };
     const saved = await saveEntity("tags", newTag);
-    appData.tags.push(saved);
+    // Replace temp with real tag
+    const idx = appData.tags.findIndex((t) => t.id === tempTag.id);
+    if (idx !== -1) {
+      appData.tags[idx] = { ...saved, id: saved._id };
+    } else {
+      appData.tags.push({ ...saved, id: saved._id });
+    }
+
     if (type === "punishment") {
       await addNotification(
         `⚠️ Punishment tag "${name}" issued for ${
@@ -1471,10 +1619,15 @@ async function addTagFromModal() {
         saved.id
       );
     }
+
+    renderCurrentPage();
+    toast("Tag added.");
+  } catch (err) {
+    appData.tags = appData.tags.filter((t) => t.id !== tempTag.id);
+    renderCurrentPage();
+    toast("Error adding tag – rolled back.");
+    console.error(err);
   }
-  closeModal("tagModal");
-  renderCurrentPage();
-  toast(selectedTagId ? "Tag updated." : "Tag added.");
 }
 async function deleteTagFromModal() {
   if (!selectedTagId) return;
@@ -3702,17 +3855,53 @@ async function addCommitteeYear() {
     return;
   }
 
-  const newCommittee = {
+  // ---- Add new committee optimistically ----
+  const tempId = "temp_" + Date.now();
+  const tempCommittee = {
+    id: tempId,
     year,
     members,
     created_at: new Date().toISOString(),
+    _temp: true,
   };
-  const saved = await saveEntity("halloffame/committees", newCommittee);
-  appData.hall_of_fame_committees.push(saved);
+
+  appData.hall_of_fame_committees.push(tempCommittee);
   closeModal("committeeModal");
+  // Also update the committee page if it's open
   renderHallOfFame();
   renderCommittee();
-  toast("Committee added.");
+  toast("Adding committee…");
+
+  try {
+    const newCommittee = {
+      year,
+      members,
+      created_at: new Date().toISOString(),
+    };
+    const saved = await saveEntity("halloffame/committees", newCommittee);
+
+    // Replace temporary committee with the real one
+    const idx = appData.hall_of_fame_committees.findIndex(
+      (c) => c.id === tempId
+    );
+    if (idx !== -1) {
+      appData.hall_of_fame_committees[idx] = { ...saved, id: saved._id };
+    } else {
+      appData.hall_of_fame_committees.push({ ...saved, id: saved._id });
+    }
+
+    renderHallOfFame();
+    renderCommittee();
+    toast("Committee added.");
+  } catch (err) {
+    appData.hall_of_fame_committees = appData.hall_of_fame_committees.filter(
+      (c) => c.id !== tempId
+    );
+    renderHallOfFame();
+    renderCommittee();
+    toast("Error adding committee – rolled back.");
+    console.error(err);
+  }
 }
 
 async function editCommittee(committeeId) {
@@ -5196,7 +5385,9 @@ async function createDuty() {
     }
   }
 
-  const newDuty = {
+  // ---- temporary duty for instant UI ----
+  const tempDuty = {
+    id: "temp_" + Date.now(),
     name,
     start_time: start,
     end_time: end,
@@ -5209,62 +5400,85 @@ async function createDuty() {
     sector_id: createDutySectorId || null,
     created_by: appData.current_user,
     created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    _temp: true,
   };
 
-  const savedDuty = await saveEntity("duties", newDuty);
-  appData.duties.push(savedDuty);
-
-  // If sector-linked, update sector's duty_settings_list
-  if (createDutySectorId) {
-    const sector = getSector(createDutySectorId);
-    if (sector) {
-      if (!sector.duty_settings_list) sector.duty_settings_list = [];
-      sector.duty_settings_list.push({
-        name,
-        start_time: start,
-        end_time: end,
-        days,
-        recurrence,
-        recurrence_interval: interval,
-        specific_dates: specificDates,
-        is_punishment: isPunishment,
-        end_date: endDate,
-      });
-      await saveEntity("sectors", sector, sector.id);
-    }
-  }
-
-  // Generate today's instance if it occurs
-  const today = getToday();
-  if (dutyOccursOnDate(savedDuty, today)) {
-    const newInst = {
-      duty_id: savedDuty.id,
-      date: today,
-      is_active: true,
-      created_at: new Date().toISOString(),
-    };
-    const savedInst = await saveEntity("duties/instances", newInst);
-    appData.duty_instances.push(savedInst);
-    for (const libId of libs) {
-      const att = {
-        duty_instance_id: savedInst.id,
-        librarian_id: libId,
-        attended: false,
-        confirmed_by: "system",
-        confirmed_at: new Date().toISOString(),
-        forgiven: false,
-        punishment_issued: false,
-      };
-      const savedAtt = await saveEntity("attendance", att);
-      appData.attendance.push(savedAtt);
-    }
-  }
-
+  appData.duties.push(tempDuty);
   closeModal("dutyModal");
   renderCurrentPage();
   updateDutyBadge();
-  toast(`Duty "${name}" created.`);
+  toast("Creating duty…");
+
+  try {
+    const newDuty = { ...tempDuty };
+    delete newDuty.id;
+    delete newDuty._temp;
+
+    const savedDuty = await saveEntity("duties", newDuty);
+
+    // Replace temp with real duty
+    const idx = appData.duties.findIndex((d) => d.id === tempDuty.id);
+    if (idx !== -1) {
+      appData.duties[idx] = { ...savedDuty, id: savedDuty._id };
+    } else {
+      appData.duties.push({ ...savedDuty, id: savedDuty._id });
+    }
+
+    // If sector-linked, update sector's duty_settings_list
+    if (createDutySectorId) {
+      const sector = getSector(createDutySectorId);
+      if (sector) {
+        if (!sector.duty_settings_list) sector.duty_settings_list = [];
+        sector.duty_settings_list.push({
+          name,
+          start_time: start,
+          end_time: end,
+          days,
+          recurrence,
+          recurrence_interval: interval,
+          specific_dates: specificDates,
+          is_punishment: isPunishment,
+          end_date: endDate,
+        });
+        await saveEntity("sectors", sector, sector.id);
+      }
+    }
+
+    // Generate today's instance if it occurs
+    const today = getToday();
+    if (dutyOccursOnDate(savedDuty, today)) {
+      const newInst = {
+        duty_id: savedDuty.id,
+        date: today,
+        is_active: true,
+        created_at: new Date().toISOString(),
+      };
+      const savedInst = await saveEntity("duties/instances", newInst);
+      appData.duty_instances.push(savedInst);
+      for (const libId of libs) {
+        const att = {
+          duty_instance_id: savedInst.id,
+          librarian_id: libId,
+          attended: false,
+          confirmed_by: "system",
+          confirmed_at: new Date().toISOString(),
+          forgiven: false,
+          punishment_issued: false,
+        };
+        const savedAtt = await saveEntity("attendance", att);
+        appData.attendance.push(savedAtt);
+      }
+    }
+
+    renderCurrentPage();
+    updateDutyBadge();
+    toast(`Duty "${name}" created.`);
+  } catch (err) {
+    appData.duties = appData.duties.filter((d) => d.id !== tempDuty.id);
+    renderCurrentPage();
+    toast("Error creating duty – rolled back.");
+    console.error(err);
+  }
 }
 
 // Helper: check if a duty occurs on a given date (reuse logic from generateDutyInstancesForDate)
