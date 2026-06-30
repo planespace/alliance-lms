@@ -335,18 +335,23 @@ async function cleanExpiredTags() {
   });
   if (expired.length === 0) return;
   for (const t of expired) {
-    await deleteEntity("tags", t.id);
-    await saveEntity("tags/history", {
-      tag_id: t.id,
-      librarian_id: t.librarian_id,
-      tag_name: t.name,
-      description: t.description,
-      type: t.type,
-      start_date: t.start_date,
-      end_date: t.end_date,
-      removed_at: new Date().toISOString(),
-      removal_reason: "auto_expired",
-    });
+    await deleteEntity("tags", t.id, true);
+    await saveEntity(
+      "tags/history",
+      {
+        tag_id: t.id,
+        librarian_id: t.librarian_id,
+        tag_name: t.name,
+        description: t.description,
+        type: t.type,
+        start_date: t.start_date,
+        end_date: t.end_date,
+        removed_at: new Date().toISOString(),
+        removal_reason: "auto_expired",
+      },
+      null,
+      true
+    );
   }
 }
 
@@ -3233,9 +3238,9 @@ async function generateMissedNotifications() {
     const toDelete = appData.notifications.filter(
       (n) => n.type === "cumulative_all" && libIdsWithMissed.has(n.librarian_id)
     );
-    // Remove from server
+    // Remove from server (silent)
     for (const n of toDelete) {
-      await deleteEntity("notifications", n.id);
+      await deleteEntity("notifications", n.id, true);
     }
     // Remove from local cache
     appData.notifications = appData.notifications.filter(
@@ -3253,7 +3258,7 @@ async function generateMissedNotifications() {
       !n.is_dismissed
   );
   for (const n of oldUndismissed) {
-    await deleteEntity("notifications", n.id);
+    await deleteEntity("notifications", n.id, true);
   }
   appData.notifications = appData.notifications.filter(
     (n) =>
@@ -3309,7 +3314,7 @@ async function generateMissedNotifications() {
     };
 
     try {
-      const saved = await saveEntity("notifications", newNotif);
+      const saved = await saveEntity("notifications", newNotif, null, true);
       appData.notifications.push(saved);
     } catch (e) {
       console.error(e);
