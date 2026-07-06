@@ -4468,16 +4468,45 @@ function renderAttendanceTabContent(instanceId) {
           checked
             ? "background:#dcfce7;border:1px solid #86efac"
             : "background:var(--bg);border:1px solid var(--border)"
-        }"><input type="checkbox" class="attendance-tab-check" data-record="${
-          r.id
-        }" ${checked ? "checked" : ""}> ${lib.name} ${
-          r.forgiven ? "(forgiven)" : ""
-        }</label>`;
+        }">
+          <input type="checkbox" class="attendance-tab-check" data-record="${
+            r.id
+          }" ${checked ? "checked" : ""} onchange="toggleAttendanceTabCheckbox(this, '${instanceId}')">
+          ${lib.name} ${r.forgiven ? "(forgiven)" : ""}
+        </label>`;
       })
       .join("")}</div>
-    <div style="margin-top:8px;font-size:13px;color:var(--text-secondary);">${
-      records.filter((r) => r.attended || r.forgiven).length
-    }/${records.length} attended</div>`;
+    <div style="margin-top:8px;font-size:13px;color:var(--text-secondary);" id="attendanceCount_${instanceId}">
+      ${records.filter((r) => r.attended || r.forgiven).length}/${records.length} attended
+    </div>`;
+}
+
+function toggleAttendanceTabCheckbox(checkbox, instanceId) {
+  const recordId = checkbox.dataset.record;
+  const rec = appData.attendance.find(a => a.id === recordId);
+  if (!rec) return;
+
+  const newChecked = checkbox.checked;
+  // Update local data instantly
+  rec.attended = newChecked;
+  if (newChecked) rec.forgiven = false;
+
+  // Update the label colour instantly
+  const label = checkbox.closest("label");
+  if (label) {
+    label.style.background = newChecked ? "#dcfce7" : "var(--bg)";
+    label.style.border = newChecked ? "1px solid #86efac" : "1px solid var(--border)";
+  }
+
+  // Update the attended count text instantly
+  const records = appData.attendance.filter(a => a.duty_instance_id === instanceId);
+  const attended = records.filter(r => r.attended || r.forgiven).length;
+  const countEl = document.getElementById("attendanceCount_" + instanceId);
+  if (countEl) {
+    countEl.textContent = `${attended}/${records.length} attended`;
+  }
+
+  // No server save here – user must click Save
 }
 
 async function selectAllAttendanceTab(instanceId, sel) {
