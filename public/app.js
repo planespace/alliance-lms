@@ -26,6 +26,10 @@ let appData = {
     cumulativeMissedDutiesThreshold: 3,
   },
 };
+function getCacheKey() {
+  const user = currentUser || JSON.parse(localStorage.getItem("currentUser") || "null");
+  return user ? `appDataCache_${user.id}` : "appDataCache_guest";
+}
 let generatingMissedNotifications = false;
 let pendingAttendanceSaves = new Map();
 let attendanceBatchTimer = null;
@@ -78,7 +82,7 @@ function hideLoading() {
 }
 
 function loadData() {
-  const cached = localStorage.getItem("appDataCache");
+  const cached = localStorage.getItem(getCacheKey());
   if (cached) {
     try {
       const parsed = JSON.parse(cached);
@@ -139,7 +143,7 @@ async function startBackgroundSync() {
     // Merge all fresh data EXCEPT notifications (they stay local)
     const { notifications: _, ...restOfFresh } = fresh;
     Object.assign(appData, restOfFresh);
-    localStorage.setItem("appDataCache", JSON.stringify(fresh));
+       localStorage.setItem(getCacheKey(), JSON.stringify(fresh));
 
     // Rebuild the local notification list from the fresh attendance data
     syncLocalNotifications();
@@ -305,7 +309,7 @@ function saveData() {
     hall_of_fame_committees: appData.hall_of_fame_committees,
     sector_assignments: appData.sector_assignments,
   };
-  localStorage.setItem("appDataCache", JSON.stringify(cacheCopy));
+  localStorage.setItem(getCacheKey(), JSON.stringify(cacheCopy));
 }
 
 function genId() {
