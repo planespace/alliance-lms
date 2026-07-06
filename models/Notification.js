@@ -16,6 +16,7 @@ const notificationSchema = new mongoose.Schema({
   forgotten_at: Date,
   dismiss_until: Date,
   created_at: { type: Date, default: Date.now },
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }
 });
 
 notificationSchema.index({ type: 1, librarian_id: 1 });

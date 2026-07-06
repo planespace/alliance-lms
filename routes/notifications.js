@@ -5,11 +5,11 @@ const express = require("express");
 const router = express.Router();
 const Notification = require("../models/Notification");
 
-// GET all notifications
+// GET all notifications for user
 router.get("/", async (req, res) => {
   try {
     const notifs = await Notification.find(
-      {},
+      { user_id: req.user._id },
       {
         message: 1,
         type: 1,
@@ -33,7 +33,8 @@ router.get("/", async (req, res) => {
 // POST create notification
 router.post("/", async (req, res) => {
   try {
-    const notification = new Notification(req.body);
+    const notifData = { ...req.body, user_id: req.user._id };
+    const notification = new Notification(notifData);
     await notification.save();
     res.status(201).json(notification);
   } catch (err) {
@@ -44,8 +45,8 @@ router.post("/", async (req, res) => {
 // PUT update notification
 router.put("/:id", async (req, res) => {
   try {
-    const notification = await Notification.findByIdAndUpdate(
-      req.params.id,
+    const notification = await Notification.findOneAndUpdate(
+      { _id: req.params.id, user_id: req.user._id },
       req.body,
       { new: true }
     );
@@ -58,7 +59,7 @@ router.put("/:id", async (req, res) => {
 // DELETE notification
 router.delete("/:id", async (req, res) => {
   try {
-    await Notification.findByIdAndDelete(req.params.id);
+    await Notification.findOneAndDelete({ _id: req.params.id, user_id: req.user._id });
     res.json({ message: "Notification deleted" });
   } catch (err) {
     res.status(400).json({ error: err.message });

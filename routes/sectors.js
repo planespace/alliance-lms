@@ -4,20 +4,16 @@
 const express = require("express");
 const router = express.Router();
 const Sector = require("../models/Sector");
+const Assignment = require("../models/SectorAssignment");
 
-// GET all sectors
+// GET all sectors for current user
 router.get("/", async (req, res) => {
   try {
     const sectors = await Sector.find(
-      {},
+      { user_id: req.user._id },
       {
-        name: 1,
-        parent_id: 1,
-        is_leaf: 1,
-        min_people: 1,
-        description: 1,
-        leader_ids: 1,
-        duty_settings_list: 1,
+        name: 1, parent_id: 1, is_leaf: 1, min_people: 1,
+        description: 1, leader_ids: 1, duty_settings_list: 1
       }
     ).lean();
     res.json(sectors);
@@ -29,7 +25,8 @@ router.get("/", async (req, res) => {
 // POST create sector
 router.post("/", async (req, res) => {
   try {
-    const sector = new Sector(req.body);
+    const sectorData = { ...req.body, user_id: req.user._id };
+    const sector = new Sector(sectorData);
     await sector.save();
     res.status(201).json(sector);
   } catch (err) {
@@ -40,9 +37,11 @@ router.post("/", async (req, res) => {
 // PUT update sector
 router.put("/:id", async (req, res) => {
   try {
-    const sector = await Sector.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-    });
+    const sector = await Sector.findOneAndUpdate(
+      { _id: req.params.id, user_id: req.user._id },
+      req.body,
+      { new: true }
+    );
     res.json(sector);
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -52,21 +51,18 @@ router.put("/:id", async (req, res) => {
 // DELETE sector
 router.delete("/:id", async (req, res) => {
   try {
-    await Sector.findByIdAndDelete(req.params.id);
+    await Sector.findOneAndDelete({ _id: req.params.id, user_id: req.user._id });
     res.json({ message: "Deleted" });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// ---- Sector Assignments (stored as embedded documents in a separate collection or array) ----
-// For simplicity we'll use a separate model
-const Assignment = require("../models/SectorAssignment");
-
+// ---- Sector Assignments ----
 router.get("/assignments", async (req, res) => {
   try {
     const assignments = await Assignment.find(
-      {},
+      { user_id: req.user._id },
       { sector_id: 1, librarian_id: 1, assigned_at: 1 }
     ).lean();
     res.json(assignments);
@@ -77,7 +73,8 @@ router.get("/assignments", async (req, res) => {
 
 router.post("/assignments", async (req, res) => {
   try {
-    const assignment = new Assignment(req.body);
+    const assignmentData = { ...req.body, user_id: req.user._id };
+    const assignment = new Assignment(assignmentData);
     await assignment.save();
     res.status(201).json(assignment);
   } catch (err) {
@@ -87,19 +84,19 @@ router.post("/assignments", async (req, res) => {
 
 router.delete("/assignments/by-sector/:sectorId", async (req, res) => {
   try {
-    await Assignment.deleteMany({ sector_id: req.params.sectorId });
+    await Assignment.deleteMany({ sector_id: req.params.sectorId, user_id: req.user._id });
     res.json({ message: "Assignments removed" });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// route for removing a specific assignment by sector_id and librarian_id
 router.delete("/assignments/:sectorId/:libId", async (req, res) => {
   try {
     await Assignment.deleteOne({
       sector_id: req.params.sectorId,
       librarian_id: req.params.libId,
+      user_id: req.user._id
     });
     res.json({ message: "Assignment removed" });
   } catch (err) {
@@ -107,10 +104,9 @@ router.delete("/assignments/:sectorId/:libId", async (req, res) => {
   }
 });
 
-// route for clearing all assignments (used in auto-assign type "all")
 router.delete("/assignments/all", async (req, res) => {
   try {
-    await Assignment.deleteMany({});
+    await Assignment.deleteMany({ user_id: req.user._id });
     res.json({ message: "All assignments cleared" });
   } catch (err) {
     res.status(400).json({ error: err.message });

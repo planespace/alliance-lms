@@ -5,19 +5,14 @@ const express = require("express");
 const router = express.Router();
 const Librarian = require("../models/Librarian");
 
-// GET all active librarians
+// GET all active librarians for the logged‑in user
 router.get("/", async (req, res) => {
   try {
     const librarians = await Librarian.find(
-      { is_deleted: false },
+      { user_id: req.user._id, is_deleted: false },
       {
-        name: 1,
-        grade: 1,
-        adm_no: 1,
-        date_joined: 1,
-        house: 1,
-        is_deleted: 1,
-        created_at: 1,
+        name: 1, grade: 1, adm_no: 1, date_joined: 1, house: 1,
+        is_deleted: 1, created_at: 1
       }
     ).lean();
     res.json(librarians);
@@ -26,10 +21,11 @@ router.get("/", async (req, res) => {
   }
 });
 
-// POST create librarian
+// POST create librarian – set user_id automatically
 router.post("/", async (req, res) => {
   try {
-    const librarian = new Librarian(req.body);
+    const librarianData = { ...req.body, user_id: req.user._id };
+    const librarian = new Librarian(librarianData);
     await librarian.save();
     res.status(201).json(librarian);
   } catch (err) {
@@ -40,8 +36,8 @@ router.post("/", async (req, res) => {
 // PUT update librarian
 router.put("/:id", async (req, res) => {
   try {
-    const librarian = await Librarian.findByIdAndUpdate(
-      req.params.id,
+    const librarian = await Librarian.findOneAndUpdate(
+      { _id: req.params.id, user_id: req.user._id },
       req.body,
       { new: true }
     );
@@ -54,7 +50,10 @@ router.put("/:id", async (req, res) => {
 // DELETE (soft delete)
 router.delete("/:id", async (req, res) => {
   try {
-    await Librarian.findByIdAndUpdate(req.params.id, { is_deleted: true });
+    await Librarian.findOneAndUpdate(
+      { _id: req.params.id, user_id: req.user._id },
+      { is_deleted: true }
+    );
     res.json({ message: "Archived" });
   } catch (err) {
     res.status(400).json({ error: err.message });

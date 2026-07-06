@@ -4,12 +4,13 @@
 const express = require("express");
 const router = express.Router();
 const Tag = require("../models/Tag");
+const TagHistory = require("../models/TagHistory");
 
-// GET all tags
+// GET all active tags for user
 router.get("/", async (req, res) => {
   try {
     const tags = await Tag.find(
-      { is_active: true },
+      { user_id: req.user._id, is_active: true },
       {
         name: 1,
         description: 1,
@@ -30,7 +31,8 @@ router.get("/", async (req, res) => {
 // POST create tag
 router.post("/", async (req, res) => {
   try {
-    const tag = new Tag(req.body);
+    const tagData = { ...req.body, user_id: req.user._id };
+    const tag = new Tag(tagData);
     await tag.save();
     res.status(201).json(tag);
   } catch (err) {
@@ -41,33 +43,35 @@ router.post("/", async (req, res) => {
 // PUT update tag
 router.put("/:id", async (req, res) => {
   try {
-    const tag = await Tag.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-    });
+    const tag = await Tag.findOneAndUpdate(
+      { _id: req.params.id, user_id: req.user._id },
+      req.body,
+      { new: true }
+    );
     res.json(tag);
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// DELETE tag (soft delete by setting is_active to false)
+// DELETE tag (soft delete)
 router.delete("/:id", async (req, res) => {
   try {
-    await Tag.findByIdAndUpdate(req.params.id, {
-      is_active: false,
-      removed_at: new Date(),
-    });
+    await Tag.findOneAndUpdate(
+      { _id: req.params.id, user_id: req.user._id },
+      { is_active: false, removed_at: new Date() }
+    );
     res.json({ message: "Tag removed" });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// Tag history – separate endpoint (optional)
-const TagHistory = require("../models/TagHistory");
+// Tag history
 router.post("/history", async (req, res) => {
   try {
-    const history = new TagHistory(req.body);
+    const historyData = { ...req.body, user_id: req.user._id };
+    const history = new TagHistory(historyData);
     await history.save();
     res.status(201).json(history);
   } catch (err) {

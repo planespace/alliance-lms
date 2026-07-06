@@ -11,6 +11,7 @@ const captainSchema = new mongoose.Schema({
   house: String,
   photo_url: String,
   created_at: { type: Date, default: Date.now },
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }
 });
 
 // Committees
@@ -30,6 +31,7 @@ const committeeSchema = new mongoose.Schema({
   year: Number,
   members: [committeeMemberSchema],
   created_at: { type: Date, default: Date.now },
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }
 });
 
 const Captain = mongoose.model("Captain", captainSchema);
