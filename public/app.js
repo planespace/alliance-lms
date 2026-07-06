@@ -2682,13 +2682,15 @@ async function saveEditDuty() {
     return;
   }
 
-  // If the duty is linked to a sector, we don't block the edit – just leave the lib list empty.
-  if (!duty.sector_id) {
-    const selectedLibs = [];
+  // Collect librarian IDs based on whether the duty is sector‑linked
+  let libs = [];
+  if (duty.sector_id) {
+    libs = getSectorPeople(duty.sector_id).map((p) => p.id);
+  } else {
     document
       .querySelectorAll(".edit-duty-lib-check:checked")
-      .forEach((cb) => selectedLibs.push(cb.value));
-    if (!selectedLibs.length) {
+      .forEach((cb) => libs.push(cb.value));
+    if (!libs.length) {
       Swal.fire("Error", "Select at least one librarian.", "error");
       return;
     }
@@ -2700,6 +2702,7 @@ async function saveEditDuty() {
     async () => {
       showLoading();
       try {
+        // 1. Update duty properties
         duty.name = name;
         duty.start_time = start;
         duty.end_time = end;
@@ -2712,7 +2715,7 @@ async function saveEditDuty() {
         duty.is_punishment = isPunishment;
         duty.updated_at = new Date().toISOString();
 
-        // Delete all future instances (today and later)
+        // 2. Delete all future instances (today and later)
         const futureInsts = appData.duty_instances.filter(
           (di) => di.duty_id === duty.id && di.date >= getToday()
         );
@@ -2729,10 +2732,35 @@ async function saveEditDuty() {
           return inst !== undefined;
         });
 
+        // 3. Save the updated duty
         await saveEntity("duties", duty, duty.id);
 
-        // ★ Immediately create today's instance if the updated duty occurs today
-        await generateDutyInstancesForDate(getToday());
+        // 4. Create today's instance with the NEWLY SELECTED librarians
+        const today = getToday();
+        if (dutyOccursOnDate(duty, today)) {
+          const newInst = {
+            duty_id: duty.id,
+            date: today,
+            is_active: true,
+            created_at: new Date().toISOString(),
+          };
+          const savedInst = await saveEntity("duties/instances", newInst);
+          appData.duty_instances.push(savedInst);
+
+          for (const libId of libs) {
+            const att = {
+              duty_instance_id: savedInst.id,
+              librarian_id: libId,
+              attended: false,
+              confirmed_by: "system",
+              confirmed_at: new Date().toISOString(),
+              forgiven: false,
+              punishment_issued: false,
+            };
+            const savedAtt = await saveEntity("attendance", att);
+            appData.attendance.push(savedAtt);
+          }
+        }
 
         closeModal("editDutyModal");
         renderCurrentPage();
