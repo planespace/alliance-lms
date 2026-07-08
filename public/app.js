@@ -4263,32 +4263,31 @@ async function syncDutyInstancesForSector(secId) {
     const sectorPeople = getSectorPeople(secId).map((p) => p.id);
 
     for (const inst of instances) {
-      // Get existing attendance records for this instance
       const existingLibIds = appData.attendance
         .filter((a) => a.duty_instance_id === inst.id)
         .map((a) => a.librarian_id);
 
-      // Find missing librarians
       const missing = sectorPeople.filter((id) => !existingLibIds.includes(id));
 
-      // Create attendance records for them
       for (const libId of missing) {
-        const att = {
-          duty_instance_id: inst.id,
-          librarian_id: libId,
-          attended: false,
-          confirmed_by: "system",
-          confirmed_at: new Date().toISOString(),
-          forgiven: false,
-          punishment_issued: false,
-        };
-        const savedAtt = await saveEntity("attendance", att);
-        appData.attendance.push(savedAtt);
+        // ★★★ Guard against duplicate local pushes ★★★
+        if (!appData.attendance.some(a => a.duty_instance_id === inst.id && a.librarian_id === libId)) {
+          const att = {
+            duty_instance_id: inst.id,
+            librarian_id: libId,
+            attended: false,
+            confirmed_by: "system",
+            confirmed_at: new Date().toISOString(),
+            forgiven: false,
+            punishment_issued: false,
+          };
+          const savedAtt = await saveEntity("attendance", att);
+          appData.attendance.push(savedAtt);
+        }
       }
     }
   }
 }
-
 function addCommitteeRow() {
   const tbody = document.getElementById("committeeMemberInputs");
   const row = document.createElement("tr");
@@ -4519,8 +4518,6 @@ function renderAttendanceTabContent(instanceId) {
 }
 
 function toggleAttendanceTabCheckbox(checkbox, instanceId) {
-  // Do NOT modify the actual attendance record here.
-  // Only update the visual appearance of the label and the attended count.
   const newChecked = checkbox.checked;
   const label = checkbox.closest("label");
   if (label) {
@@ -4528,13 +4525,11 @@ function toggleAttendanceTabCheckbox(checkbox, instanceId) {
     label.style.border = newChecked ? "1px solid #86efac" : "1px solid var(--border)";
   }
 
-  // Update the attended count text instantly (purely visual, using checkbox states)
-  const allCheckboxes = document.querySelectorAll(`.attendance-tab-check[data-record]`);
-  let attended = 0;
-  let total = 0;
-  allCheckboxes.forEach((cb) => {
-    // Only count checkboxes that belong to this instance (to avoid counting other tabs)
-    // We can check if the record ID's instance matches instanceId by looking up the record.
+  // Update the attended count text (visual only, using checkbox states)
+  const container = document.getElementById("attendanceModalContainer");
+  const allCheckboxes = container.querySelectorAll(".attendance-tab-check[data-record]");
+  let attended = 0, total = 0;
+  allCheckboxes.forEach(cb => {
     const rec = appData.attendance.find(a => a.id === cb.dataset.record);
     if (rec && rec.duty_instance_id === instanceId) {
       total++;
@@ -4542,9 +4537,7 @@ function toggleAttendanceTabCheckbox(checkbox, instanceId) {
     }
   });
   const countEl = document.getElementById("attendanceCount_" + instanceId);
-  if (countEl) {
-    countEl.textContent = `${attended}/${total} attended`;
-  }
+  if (countEl) countEl.textContent = `${attended}/${total} attended`;
 }
 
 async function selectAllAttendanceTab(instanceId, sel) {
@@ -5466,7 +5459,6 @@ function syncLocalNotifications() {
     return instance !== undefined;
   });
 
-  // Keep any non‑cumulative notifications (dismissed ones, old types, etc.)
   const otherNotifs = appData.notifications.filter(
     (n) => n.type !== "cumulative_all"
   );
@@ -5483,7 +5475,8 @@ function syncLocalNotifications() {
 
     for (const [libId, records] of Object.entries(grouped)) {
       const lib = getLib(libId);
-      if (!lib) continue;
+      // ★★★ Skip deleted librarians ★★★
+      if (!lib || lib.is_deleted) continue;
 
       const totalMissed = records.length;
       const daysSet = new Set();
@@ -5495,7 +5488,6 @@ function syncLocalNotifications() {
       });
       const distinctDays = daysSet.size;
 
-      // Use a stable local ID (no server dependency)
       newCumulative.push({
         id: "local_" + libId,
         message: `⚠️ ${lib.name} missed ${totalMissed} duties across ${distinctDays} day(s)`,
@@ -5509,7 +5501,6 @@ function syncLocalNotifications() {
     }
   }
 
-  // Replace the entire notifications array with local data
   appData.notifications = [...otherNotifs, ...newCumulative];
 }
 function showDutyActions(dutyId) {
