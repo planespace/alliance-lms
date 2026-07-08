@@ -60,4 +60,14 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
+// Hard delete a librarian permanently (used by archive)
+router.delete("/:id/permanent", async (req, res) => {
+  try {
+    await Librarian.findOneAndDelete({ _id: req.params.id, user_id: req.user._id });
+    res.json({ message: "Permanently deleted" });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
 module.exports = router;

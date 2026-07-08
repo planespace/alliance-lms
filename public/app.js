@@ -3,7 +3,7 @@
 // ============================================
 
 const API_BASE = "/api"; // assumes frontend & backend on same domain
-
+let selectedCommitteeId = null;
 // global cache – replaces localStorage
 let appData = {
   librarians: [],
@@ -2622,8 +2622,13 @@ function editDuty(dutyId) {
   `;
 
   if (duty.sector_id) {
-    document.getElementById("editDutyLibrarianCheckboxes").innerHTML =
-      '<p class="text-muted" style="padding:10px;">📌 Librarians are automatically synced from the leaf sector.</p>';
+   const sector = getSector(duty.sector_id);
+const sectorPath = sector ? getSectorPath(sector.id) : "the sector";
+document.getElementById("editDutyLibrarianCheckboxes").innerHTML = `
+  <p class="text-muted" style="padding:10px;">
+    📌 Librarians are inherited from <strong>${sectorPath}</strong>.<br>
+    To change them, edit the sector assignments.
+  </p>`;
     const selectBtns = document.getElementById("editDutySelectAllBtns");
     if (selectBtns) selectBtns.style.display = "none";
   } else {
@@ -2666,17 +2671,13 @@ async function saveEditDuty() {
   const start = document.getElementById("editDutyStart").value;
   const end = document.getElementById("editDutyEnd").value;
   const recurrence = document.getElementById("editDutyRecurrence").value;
-  const isPunishment =
-    document.getElementById("editDutyIsPunishment").value === "true";
+  const isPunishment = document.getElementById("editDutyIsPunishment").value === "true";
   const endDate = document.getElementById("editDutyEndDate").value || null;
-  const interval =
-    recurrence === "biweekly"
-      ? parseInt(document.getElementById("editRecurrenceInterval").value) || 1
-      : null;
+  const interval = recurrence === "biweekly"
+    ? parseInt(document.getElementById("editRecurrenceInterval").value) || 1
+    : null;
   const days = [];
-  document
-    .querySelectorAll(".edit-duty-day:checked")
-    .forEach((cb) => days.push(cb.value));
+  document.querySelectorAll(".edit-duty-day:checked").forEach((cb) => days.push(cb.value));
 
   if (!name || !start || !end || days.length === 0) {
     Swal.fire("Error", "Fill name, start, end, and select days.", "error");
@@ -2687,14 +2688,16 @@ async function saveEditDuty() {
     return;
   }
 
-  // Collect librarian IDs based on whether the duty is sector‑linked
+  // Collect librarian IDs
   let libs = [];
   if (duty.sector_id) {
     libs = getSectorPeople(duty.sector_id).map((p) => p.id);
+    if (libs.length === 0) {
+      Swal.fire("Error", "The linked sector has no librarians. Assign some first.", "error");
+      return;
+    }
   } else {
-    document
-      .querySelectorAll(".edit-duty-lib-check:checked")
-      .forEach((cb) => libs.push(cb.value));
+    document.querySelectorAll(".edit-duty-lib-check:checked").forEach((cb) => libs.push(cb.value));
     if (!libs.length) {
       Swal.fire("Error", "Select at least one librarian.", "error");
       return;
@@ -2705,7 +2708,13 @@ async function saveEditDuty() {
     "⚠️ Confirm Changes",
     `<p>Editing <strong>${duty.name}</strong> will affect <strong>ALL FUTURE instances</strong>. Past instances remain unchanged.</p>`,
     async () => {
-      showLoading();
+      // Show a Swal loading modal (overlays everything, clear feedback)
+      Swal.fire({
+        title: "Saving duty...",
+        allowOutsideClick: false,
+        didOpen: () => Swal.showLoading()
+      });
+
       try {
         // 1. Update duty properties
         duty.name = name;
@@ -2714,28 +2723,31 @@ async function saveEditDuty() {
         duty.days = days;
         duty.recurrence_type = recurrence;
         duty.recurrence_interval = interval;
-        duty.specific_dates =
-          recurrence === "specific" ? [...editSpecificDatesList] : null;
+        duty.specific_dates = recurrence === "specific" ? [...editSpecificDatesList] : null;
         duty.end_date = endDate;
         duty.is_punishment = isPunishment;
         duty.updated_at = new Date().toISOString();
 
-        // 2. Delete all future instances (today and later)
+        // 2. Delete all future instances AND their attendance records
         const futureInsts = appData.duty_instances.filter(
           (di) => di.duty_id === duty.id && di.date >= getToday()
         );
+
         for (const inst of futureInsts) {
+          // Delete attendance records for this instance first
+          await deleteEntity("attendance/by-instance", inst.id);
+          // Remove from local cache immediately
+          appData.attendance = appData.attendance.filter(
+            (a) => a.duty_instance_id !== inst.id
+          );
+          // Delete the instance itself
           await deleteEntity("duties/instances", inst.id);
         }
+
+        // Remove future instances from local cache
         appData.duty_instances = appData.duty_instances.filter(
           (di) => !(di.duty_id === duty.id && di.date >= getToday())
         );
-        appData.attendance = appData.attendance.filter((a) => {
-          const inst = appData.duty_instances.find(
-            (di) => di.id === a.duty_instance_id
-          );
-          return inst !== undefined;
-        });
 
         // 3. Save the updated duty
         await saveEntity("duties", duty, duty.id);
@@ -2767,15 +2779,15 @@ async function saveEditDuty() {
           }
         }
 
+        Swal.close(); // close the loading swal
         closeModal("editDutyModal");
         renderCurrentPage();
         updateDutyBadge();
         toast("Duty updated – today’s instance has been refreshed.");
       } catch (err) {
+        Swal.close();
         console.error(err);
         toast("Error saving duty. Please try again.");
-      } finally {
-        hideLoading();
       }
     }
   );
@@ -3509,13 +3521,14 @@ async function clearAllDismissed() {
     "Clear All Dismissed",
     `<p>Are you sure you want to permanently delete <strong>all dismissed notifications</strong>? This cannot be undone.</p>`,
     async () => {
-      const ids = appData.notifications
-        .filter((n) => n.is_dismissed)
-        .map((n) => n.id);
-      for (const id of ids) await deleteEntity("notifications", id);
-      appData.notifications = appData.notifications.filter(
-        (n) => !n.is_dismissed
-      );
+      // Delete both server and local dismissed notifications
+      const dismissed = appData.notifications.filter(n => n.is_dismissed);
+      for (const n of dismissed) {
+        if (!n.id.startsWith("local_")) {
+          await deleteEntity("notifications", n.id);
+        }
+      }
+      appData.notifications = appData.notifications.filter(n => !n.is_dismissed);
       renderNotifications();
       toast("All dismissed notifications cleared.");
     }
@@ -3930,14 +3943,16 @@ async function permanentlyDeleteLibrarian(id) {
     async () => {
       showLoading();
       try {
-        await deleteEntity("librarians", id);
+        const headers = {};
+        if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+        // Hard delete via new permanent endpoint
+        await fetch(`${API_BASE}/librarians/${id}/permanent`, { method: "DELETE", headers });
         appData.librarians = appData.librarians.filter((l) => l.id !== id);
+        // ... (the rest of the cleanup as before) ...
         const assignmentsToDelete = appData.sector_assignments.filter(
           (a) => a.librarian_id === id
         );
         for (const a of assignmentsToDelete) {
-          const headers = {};
-          if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
           await fetch(
             `${API_BASE}/sectors/assignments/${a.sector_id}/${a.librarian_id}`,
             { method: "DELETE", headers }
@@ -5362,52 +5377,93 @@ function renderDuties() {
     return;
   }
 
-  if (isCalendarView) {
-    const today = getToday();
-    const [year, month] = today.split("-").slice(0, 2);
-    const daysInMonth = new Date(year, month, 0).getDate();
-    const firstDay = new Date(year, month - 1, 1).getDay();
-    const dutiesForMonth = appData.duty_instances.filter(
-      (di) => di.date.startsWith(`${year}-${month}`) && di.is_active
+if (isCalendarView) {
+  // Get the month and year from the global date navigator (or currentViewDate)
+  const [year, month] = currentViewDate.split("-").slice(0, 2).map(Number);
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const firstDay = new Date(year, month - 1, 1).getDay();
+
+  // Build the filtered set of duty IDs that match the current dropdown selection
+  // Re‑compute the duties that should appear (respect the filter)
+  let visibleDuties = [];
+  const today = getToday();
+  const weekDates = getWeekDates();
+  if (filter === "today") {
+    visibleDuties = appData.duties.filter(d =>
+      appData.duty_instances.some(di => di.duty_id === d.id && di.date === today)
     );
-    const dutiesByDate = {};
-    dutiesForMonth.forEach((di) => {
-      const date = di.date;
-      if (!dutiesByDate[date]) dutiesByDate[date] = [];
-      const duty = appData.duties.find((d) => d.id === di.duty_id);
-      if (duty && duties.some((d2) => d2.id === duty.id))
-        dutiesByDate[date].push(duty);
-    });
-    let calHtml = `<div class="calendar-grid">`;
-    ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].forEach(
-      (h) => (calHtml += `<div class="day-header">${h}</div>`)
+  } else if (filter === "week") {
+    visibleDuties = appData.duties.filter(d =>
+      appData.duty_instances.some(di => di.duty_id === d.id && weekDates.includes(di.date))
     );
-    for (let i = 0; i < firstDay; i++)
-      calHtml += `<div class="day empty"></div>`;
-    for (let d = 1; d <= daysInMonth; d++) {
-      const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(
-        d
-      ).padStart(2, "0")}`;
-      const isToday = dateStr === today;
-      const isPast = dateStr < today;
-      calHtml += `<div class="day ${isToday ? "today" : ""} ${
-        isPast ? "past" : ""
-      }"><div class="date-num">${d}</div>`;
-      if (dutiesByDate[dateStr]) {
-        dutiesByDate[dateStr].forEach((duty) => {
-          calHtml += `<div class="duty-item ${
-            duty.is_punishment ? "punishment" : "regular"
-          } ${isPast ? "past" : ""}" onclick="showDutyActions('${duty.id}')">${
-            duty.name
-          }</div>`;
-        });
+  } else if (filter === "punishment") {
+    visibleDuties = appData.duties.filter(d => d.is_punishment);
+  } else {
+    visibleDuties = [...appData.duties]; // "all" or "all active"
+  }
+
+  // If "Has Librarians" is checked, further filter
+  if (hasLibrarians) {
+    visibleDuties = visibleDuties.filter(d => {
+      const hasAttendance = appData.duty_instances
+        .filter(di => di.duty_id === d.id)
+        .some(di => appData.attendance.some(a => a.duty_instance_id === di.id));
+      if (hasAttendance) return true;
+      if (d.sector_id) {
+        const sector = getSector(d.sector_id);
+        return sector && getSectorPeople(sector.id).length > 0;
       }
-      calHtml += `</div>`;
+      return false;
+    });
+  }
+
+  const visibleDutyIds = new Set(visibleDuties.map(d => d.id));
+
+  // Gather duty instances only for the visible duties and this month
+  const dutiesForMonth = appData.duty_instances.filter(
+    di => di.date.startsWith(`${year}-${String(month).padStart(2,"0")}`) && di.is_active && visibleDutyIds.has(di.duty_id)
+  );
+  const dutiesByDate = {};
+  dutiesForMonth.forEach(di => {
+    const date = di.date;
+    if (!dutiesByDate[date]) dutiesByDate[date] = [];
+    const duty = appData.duties.find(d => d.id === di.duty_id);
+    if (duty) dutiesByDate[date].push(duty);
+  });
+
+  // Month navigation buttons
+  const prevMonth = month === 1 ? 12 : month - 1;
+  const prevYear = month === 1 ? year - 1 : year;
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const nextYear = month === 12 ? year + 1 : year;
+
+  let calHtml = `
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <button class="btn btn-secondary btn-sm" onclick="navigateCalendarMonth(${prevYear}, ${prevMonth})">◀ ${prevMonth}/${prevYear}</button>
+      <strong>${new Date(year, month-1).toLocaleDateString("en-US", { month: "long", year: "numeric" })}</strong>
+      <button class="btn btn-secondary btn-sm" onclick="navigateCalendarMonth(${nextYear}, ${nextMonth})">${nextMonth}/${nextYear} ▶</button>
+    </div>
+    <div class="calendar-grid">
+  `;
+  ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].forEach(h => calHtml += `<div class="day-header">${h}</div>`);
+  for (let i = 0; i < firstDay; i++) calHtml += `<div class="day empty"></div>`;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${year}-${String(month).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+    const isToday = dateStr === today;
+    const isPast = dateStr < today;
+    calHtml += `<div class="day ${isToday ? "today" : ""} ${isPast ? "past" : ""}">`;
+    calHtml += `<div class="date-num">${d}</div>`;
+    if (dutiesByDate[dateStr]) {
+      dutiesByDate[dateStr].forEach(duty => {
+        calHtml += `<div class="duty-item ${duty.is_punishment ? "punishment" : "regular"} ${isPast ? "past" : ""}" onclick="showDutyActions('${duty.id}')">${duty.name}</div>`;
+      });
     }
     calHtml += `</div>`;
-    container.innerHTML = calHtml;
-    return;
   }
+  calHtml += `</div>`;
+  container.innerHTML = calHtml;
+  return;
+}
 
   // Card view
   container.innerHTML = duties
@@ -6247,6 +6303,17 @@ function rebuildNotificationPopup(libId) {
   html += `</tbody></table></div>`;
   content.innerHTML = html;
 }
+
+function navigateCalendarMonth(year, month) {
+  // Update the global date to the first day of that month (but not affect the actual date)
+  // We'll use a temporary variable and re‑render the calendar.
+  currentViewDate = `${year}-${String(month).padStart(2, "0")}-01`;
+  document.getElementById("viewDate").value = currentViewDate;
+  // Re‑render duties (calendar view)
+  renderDuties();
+}
+
+
 // ============================================
 // SERVICE WORKER REGISTRATION (instant offline)
 // ============================================
