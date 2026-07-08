@@ -30,6 +30,7 @@ function getCacheKey() {
   const user = currentUser || JSON.parse(localStorage.getItem("currentUser") || "null");
   return user ? `appDataCache_${user.id}` : "appDataCache_guest";
 }
+let isSaving = false;
 let generatingMissedNotifications = false;
 let pendingAttendanceSaves = new Map();
 let attendanceBatchTimer = null;
@@ -140,10 +141,13 @@ async function startBackgroundSync() {
       })),
     };
 
-    // Merge all fresh data EXCEPT notifications (they stay local)
     const { notifications: _, ...restOfFresh } = fresh;
-    Object.assign(appData, restOfFresh);
-       localStorage.setItem(getCacheKey(), JSON.stringify(fresh));
+
+    // ★★★ ONLY overwrite local data if no save is currently in progress ★★★
+    if (!isSaving) {
+      Object.assign(appData, restOfFresh);
+      localStorage.setItem(getCacheKey(), JSON.stringify(fresh));
+    }
 
     // Rebuild the local notification list from the fresh attendance data
     syncLocalNotifications();
@@ -153,7 +157,6 @@ async function startBackgroundSync() {
     updateNotificationBadge();
 
     // Re‑render the current page, but skip if the user is viewing notifications
-    // (notifications have their own periodic refresh)
     if (currentPage !== "notifications") {
       renderCurrentPage();
     }
@@ -258,6 +261,7 @@ async function bulkAddLibrarians() {
 }
 
 async function saveEntity(type, data, id = null, skipLoading = false) {
+  isSaving = true;
   if (!skipLoading) showLoading();
   try {
     const url = id ? `${API_BASE}/${type}/${id}` : `${API_BASE}/${type}`;
@@ -278,6 +282,7 @@ async function saveEntity(type, data, id = null, skipLoading = false) {
     return saved;
   } finally {
     if (!skipLoading) hideLoading();
+    isSaving = false;
   }
 }
 
@@ -4514,31 +4519,32 @@ function renderAttendanceTabContent(instanceId) {
 }
 
 function toggleAttendanceTabCheckbox(checkbox, instanceId) {
-  const recordId = checkbox.dataset.record;
-  const rec = appData.attendance.find(a => a.id === recordId);
-  if (!rec) return;
-
+  // Do NOT modify the actual attendance record here.
+  // Only update the visual appearance of the label and the attended count.
   const newChecked = checkbox.checked;
-  // Update local data instantly
-  rec.attended = newChecked;
-  if (newChecked) rec.forgiven = false;
-
-  // Update the label colour instantly
   const label = checkbox.closest("label");
   if (label) {
     label.style.background = newChecked ? "#dcfce7" : "var(--bg)";
     label.style.border = newChecked ? "1px solid #86efac" : "1px solid var(--border)";
   }
 
-  // Update the attended count text instantly
-  const records = appData.attendance.filter(a => a.duty_instance_id === instanceId);
-  const attended = records.filter(r => r.attended || r.forgiven).length;
+  // Update the attended count text instantly (purely visual, using checkbox states)
+  const allCheckboxes = document.querySelectorAll(`.attendance-tab-check[data-record]`);
+  let attended = 0;
+  let total = 0;
+  allCheckboxes.forEach((cb) => {
+    // Only count checkboxes that belong to this instance (to avoid counting other tabs)
+    // We can check if the record ID's instance matches instanceId by looking up the record.
+    const rec = appData.attendance.find(a => a.id === cb.dataset.record);
+    if (rec && rec.duty_instance_id === instanceId) {
+      total++;
+      if (cb.checked) attended++;
+    }
+  });
   const countEl = document.getElementById("attendanceCount_" + instanceId);
   if (countEl) {
-    countEl.textContent = `${attended}/${records.length} attended`;
+    countEl.textContent = `${attended}/${total} attended`;
   }
-
-  // No server save here – user must click Save
 }
 
 async function selectAllAttendanceTab(instanceId, sel) {
