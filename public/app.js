@@ -2155,6 +2155,7 @@ async function saveQuickLeaf() {
         };
         const savedAtt = await saveEntity("attendance", att);
         appData.attendance.push({ ...savedAtt, id: savedAtt._id });
+        recalcAttendancePct(libId);
       }
     }
 
@@ -2786,6 +2787,7 @@ async function saveEditDuty() {
             };
             const savedAtt = await saveEntity("attendance", att);
             appData.attendance.push(savedAtt);
+            recalcAttendancePct(libId); 
           }
         }
 
@@ -2892,6 +2894,14 @@ async function deleteDuty(dutyId) {
           (di) => di.duty_id === dutyId
         );
 
+        // ★ Collect affected librarian IDs before deleting attendance
+        const affectedLibIds = new Set();
+        allInstances.forEach(inst => {
+          appData.attendance
+            .filter(a => a.duty_instance_id === inst.id)
+            .forEach(a => affectedLibIds.add(a.librarian_id));
+        });
+
         if (clearHistory) {
           // Delete attendance for EVERY instance (past + future)
           for (const inst of allInstances) {
@@ -2904,7 +2914,6 @@ async function deleteDuty(dutyId) {
           for (const inst of allInstances) {
             await deleteEntity("duties/instances", inst.id);
           }
-          // Remove all from cache
           appData.duty_instances = appData.duty_instances.filter(
             (di) => di.duty_id !== dutyId
           );
@@ -2914,7 +2923,6 @@ async function deleteDuty(dutyId) {
             (inst) => inst.date >= getToday()
           );
 
-          // Delete attendance for future instances only
           for (const inst of futureInsts) {
             await deleteEntity("attendance/by-instance", inst.id);
           }
@@ -2922,16 +2930,17 @@ async function deleteDuty(dutyId) {
             (a) => !futureInsts.some((inst) => inst.id === a.duty_instance_id)
           );
 
-          // Delete future instances from DB
           for (const inst of futureInsts) {
             await deleteEntity("duties/instances", inst.id);
           }
 
-          // ★ Keep past instances in cache – only remove future ones
           appData.duty_instances = appData.duty_instances.filter(
             (di) => !(di.duty_id === dutyId && di.date >= getToday())
           );
         }
+
+        // ★ Recalculate attendance percentages for all affected librarians
+        affectedLibIds.forEach(id => recalcAttendancePct(id));
 
         // Delete the duty itself
         await deleteEntity("duties", dutyId);
@@ -2942,7 +2951,6 @@ async function deleteDuty(dutyId) {
         }
 
         saveData();
-        // ★ Re‑render the current page (updates dashboard, duties, attendance, etc.)
         renderCurrentPage();
         updateDutyBadge();
         toast(
@@ -4317,6 +4325,7 @@ async function syncDutyInstancesForSector(secId) {
           };
           const savedAtt = await saveEntity("attendance", att);
           appData.attendance.push(savedAtt);
+          recalcAttendancePct(libId); 
         }
       }
     }
@@ -5070,7 +5079,6 @@ async function removeFromSector(sectorId, libId) {
     return;
   }
 
-  // Confirmation popup with history option
   Swal.fire({
     title: "Remove from Sector",
     html: `
@@ -5136,6 +5144,7 @@ async function removeFromSector(sectorId, libId) {
           appData.attendance = appData.attendance.filter(
             (a) => !futureAtt.some((fa) => fa.id === a.id)
           );
+          recalcAttendancePct(libId);   // ★ added
         } else {
           // Delete all attendance for this librarian in this sector
           for (const att of attToDelete) {
@@ -5144,6 +5153,7 @@ async function removeFromSector(sectorId, libId) {
           appData.attendance = appData.attendance.filter(
             (a) => !attToDelete.some((fa) => fa.id === a.id)
           );
+          recalcAttendancePct(libId);   // ★ added
         }
       }
 
@@ -5155,7 +5165,6 @@ async function removeFromSector(sectorId, libId) {
 
       const mgmtModal = document.getElementById("sectorManagementModal");
       if (mgmtModal && mgmtModal.classList.contains("active")) {
-        // Refresh the modal content using the stored librarian ID
         if (currentManagementLibId) {
           viewSectorManagement(currentManagementLibId);
         }
@@ -5265,6 +5274,8 @@ async function removeAllFromSector(secId) {
       }
 
       await syncDutyInstancesForSector(secId);
+      people.forEach(p => recalcAttendancePct(p.id));   // ★ added
+
       renderCurrentPage();
       toast("All removed.");
     } catch (err) {
@@ -5768,6 +5779,7 @@ async function createDuty() {
         };
         const savedAtt = await saveEntity("attendance", att);
         appData.attendance.push(savedAtt);
+        recalcAttendancePct(libId); 
       }
     }
 
@@ -5943,6 +5955,7 @@ async function generateDutyInstancesForDate(date) {
         // ★ silent save – no loading bar
         const savedAtt = await saveEntity("attendance", att, null, true);
         appData.attendance.push(savedAtt);
+        recalcAttendancePct(libId); 
       }
     }
   }
