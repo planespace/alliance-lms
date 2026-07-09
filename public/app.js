@@ -2867,26 +2867,21 @@ async function deleteDuty(dutyId) {
   if (!duty) return;
 
   showConfirm(
-    "Delete Duty",
+    "Stop / Delete Duty",
     `<div>
-      <p>Are you sure you want to delete <strong>${duty.name}</strong>?</p>
+      <p>What would you like to do with <strong>${duty.name}</strong>?</p>
       <div class="confirm-warning">
-        <strong>🛑 This will stop the duty from occurring in the future.</strong>
+        <strong>🛑 Stop future occurrences</strong>
         <ul>
-          <li><strong>Past</strong> instances (before today) and their attendance will be <strong>kept</strong> so you can still view them.</li>
-          <li>The duty will <strong>no longer appear</strong> on today or upcoming days.</li>
-          <li>If you want to delete everything (including past history), check the box below.</li>
-          ${
-            duty.is_punishment
-              ? "<li>Associated punishment tags will be removed.</li>"
-              : ""
-          }
+          <li>The duty will no longer be created for today or any future date.</li>
+          <li>Past attendance records will <strong>remain unchanged</strong> and the duty will still appear in history with its name.</li>
+          <li>The duty will be marked as “Ended” in the duty list.</li>
         </ul>
+        <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:14px;">
+          <input type="checkbox" id="clearDutyHistory" />
+          <strong>Permanently delete</strong> – also erase all past attendance records and the duty itself (cannot be undone).
+        </label>
       </div>
-      <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:14px;">
-        <input type="checkbox" id="clearDutyHistory" />
-        Also permanently delete all past attendance records for this duty
-      </label>
     </div>`,
     async () => {
       showLoading();
@@ -2894,77 +2889,80 @@ async function deleteDuty(dutyId) {
         const clearHistory =
           document.getElementById("clearDutyHistory")?.checked || false;
 
-        const allInstances = appData.duty_instances.filter(
-          (di) => di.duty_id === dutyId
-        );
-
-        // ★ Collect affected librarian IDs before deleting attendance
-        const affectedLibIds = new Set();
-        allInstances.forEach(inst => {
-          appData.attendance
-            .filter(a => a.duty_instance_id === inst.id)
-            .forEach(a => affectedLibIds.add(a.librarian_id));
-        });
-
         if (clearHistory) {
-          // Delete attendance for EVERY instance (past + future)
+          // --- Permanently delete everything ---
+          const allInstances = appData.duty_instances.filter(
+            (di) => di.duty_id === dutyId
+          );
+
+          const affectedLibIds = new Set();
+          allInstances.forEach(inst => {
+            appData.attendance
+              .filter(a => a.duty_instance_id === inst.id)
+              .forEach(a => affectedLibIds.add(a.librarian_id));
+          });
+
           for (const inst of allInstances) {
             await deleteEntity("attendance/by-instance", inst.id);
-          }
-          appData.attendance = appData.attendance.filter(
-            (a) => !allInstances.some((inst) => inst.id === a.duty_instance_id)
-          );
-          // Delete all instances
-          for (const inst of allInstances) {
+            appData.attendance = appData.attendance.filter(
+              (a) => a.duty_instance_id !== inst.id
+            );
             await deleteEntity("duties/instances", inst.id);
           }
           appData.duty_instances = appData.duty_instances.filter(
             (di) => di.duty_id !== dutyId
           );
+          await deleteEntity("duties", dutyId);
+          appData.duties = appData.duties.filter((d) => d.id !== dutyId);
+
+          affectedLibIds.forEach(id => recalcAttendancePct(id));
         } else {
-          // Keep past instances, delete only future ones
-          const futureInsts = allInstances.filter(
-            (inst) => inst.date >= getToday()
+          // --- Stop future occurrences only ---
+          // Set end_date to yesterday so today and later won't occur
+          const today = getToday();
+          const d = new Date(today);
+          d.setDate(d.getDate() - 1);
+          const yesterday = d.toISOString().split("T")[0];
+          duty.end_date = yesterday;
+          await saveEntity("duties", duty, duty.id);
+
+          // Remove all future instances (today and later) and their attendance
+          const futureInsts = appData.duty_instances.filter(
+            (di) => di.duty_id === dutyId && di.date >= today
           );
+
+          const affectedLibIds = new Set();
+          futureInsts.forEach(inst => {
+            appData.attendance
+              .filter(a => a.duty_instance_id === inst.id)
+              .forEach(a => affectedLibIds.add(a.librarian_id));
+          });
 
           for (const inst of futureInsts) {
             await deleteEntity("attendance/by-instance", inst.id);
-          }
-          appData.attendance = appData.attendance.filter(
-            (a) => !futureInsts.some((inst) => inst.id === a.duty_instance_id)
-          );
-
-          for (const inst of futureInsts) {
+            appData.attendance = appData.attendance.filter(
+              (a) => a.duty_instance_id !== inst.id
+            );
             await deleteEntity("duties/instances", inst.id);
           }
-
           appData.duty_instances = appData.duty_instances.filter(
-            (di) => !(di.duty_id === dutyId && di.date >= getToday())
+            (di) => !(di.duty_id === dutyId && di.date >= today)
           );
-        }
 
-        // ★ Recalculate attendance percentages for all affected librarians
-        affectedLibIds.forEach(id => recalcAttendancePct(id));
-
-        // Delete the duty itself
-        await deleteEntity("duties", dutyId);
-        appData.duties = appData.duties.filter((d) => d.id !== dutyId);
-
-        if (duty.is_punishment) {
-          appData.tags = appData.tags.filter((t) => t.duty_id !== dutyId);
+          affectedLibIds.forEach(id => recalcAttendancePct(id));
         }
 
         saveData();
         renderCurrentPage();
         updateDutyBadge();
         toast(
-          `Duty "${duty.name}" deleted – future occurrences stopped.${
-            clearHistory ? " All history cleared." : " Past records kept."
-          }`
+          clearHistory
+            ? "Duty permanently deleted."
+            : "Duty stopped – past records preserved."
         );
       } catch (err) {
         console.error(err);
-        toast("Deletion failed.");
+        toast("Action failed.");
       } finally {
         hideLoading();
       }
@@ -3101,7 +3099,6 @@ async function selectAllAttendance(instId, attended) {
     r.forgiven = false;
     r.confirmed_at = new Date().toISOString();
     r.confirmed_by = appData.current_user;
-    recalcAttendancePct(r.librarian_id);
   });
 
   renderAttendance();
@@ -3117,6 +3114,7 @@ async function selectAllAttendance(instId, attended) {
 
   if (attendanceBatchTimer) clearTimeout(attendanceBatchTimer);
   attendanceBatchTimer = setTimeout(flushAttendanceSaves, 300);
+  showLoading();   // ★ show loading bar while the batch timer waits
 }
 
 async function flushAttendanceSaves() {
@@ -3125,19 +3123,17 @@ async function flushAttendanceSaves() {
   attendanceBatchTimer = null;
 
   // Save all in parallel (no loading bar)
-const promises = recordsToSave.map((r) =>
-  saveEntity("attendance", r, r.id, true)
-    .then(() => {
-      recalcAttendancePct(r.librarian_id);
-    })
-    .catch((err) =>
+  const promises = recordsToSave.map((r) =>
+    saveEntity("attendance", r, r.id, true).catch((err) =>
       console.error("Failed to save attendance record", r.id, err)
     )
-);
-await Promise.all(promises);
+  );
+  await Promise.all(promises);
 
   // After all saves, regenerate missed notifications once
   await generateMissedNotifications();
+
+  hideLoading();   // ★ hide loading bar – saving is complete
 }
 
 async function toggleSingleAttendance(recordId, checkbox) {
@@ -3154,18 +3150,19 @@ async function toggleSingleAttendance(recordId, checkbox) {
   rec.forgiven = false;
   rec.confirmed_at = new Date().toISOString();
   rec.confirmed_by = appData.current_user;
-recalcAttendancePct(rec.librarian_id);
+
   updateNotificationBadge();
   updateDutyBadge();
   syncLocalNotifications();
   if (currentPage === "notifications") {
-    renderNotifications(); // ★ instantly refresh the notification page
+    renderNotifications();
   }
 
   pendingAttendanceSaves.set(recordId, rec);
 
   if (attendanceBatchTimer) clearTimeout(attendanceBatchTimer);
   attendanceBatchTimer = setTimeout(flushAttendanceSaves, 300);
+  showLoading();   // ★ show loading bar while the batch timer waits
 
   toast(newChecked ? "✅ Present" : "❌ Absent");
 }
@@ -5524,10 +5521,11 @@ if (isCalendarView) {
       return `<div class="duty-card ${d.is_punishment ? "punishment" : ""}">
       <div class="duty-header">
         <div>
-          <span class="duty-title">${d.name}</span>
-          <span class="duty-meta">${formatTime(d.start_time)}-${formatTime(
-        d.end_time
-      )} · ${d.days.map(getDayName).join(", ")}</span>
+     <span class="duty-title">
+  ${d.name}
+  ${d.end_date && d.end_date < getToday() ? '<span class="tag-badge punishment" style="margin-left:6px;">Ended</span>' : ''}
+</span>
+<span class="duty-meta">${formatTime(d.start_time)}-${formatTime(d.end_time)} · ${d.days.map(getDayName).join(", ")}</span>
         </div>
         <div class="duty-actions">
           <span>${attended}/${total} attended</span>
