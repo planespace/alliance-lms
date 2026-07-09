@@ -3122,18 +3122,26 @@ async function flushAttendanceSaves() {
   pendingAttendanceSaves.clear();
   attendanceBatchTimer = null;
 
+  let hadError = false;
+
   const promises = recordsToSave.map((r) =>
     saveEntity("attendance", r, r.id, true)
       .then(() => {
-        recalcAttendancePct(r.librarian_id);   // ★ update after successful save
+        recalcAttendancePct(r.librarian_id);
       })
-      .catch((err) =>
-        console.error("Failed to save attendance record", r.id, err)
-      )
+      .catch((err) => {
+        console.error("Failed to save attendance record", r.id, err);
+        hadError = true;
+      })
   );
   await Promise.all(promises);
 
+  if (hadError) {
+    toast("⚠️ Some changes could not be saved. Please try again.");
+  }
+
   await generateMissedNotifications();
+  hideLoading();
 }
 
 async function toggleSingleAttendance(recordId, checkbox) {
@@ -6354,6 +6362,12 @@ function navigateCalendarMonth(year, month) {
   renderDuties();
 }
 
+window.addEventListener('beforeunload', (event) => {
+  if (pendingAttendanceSaves.size > 0) {
+    event.preventDefault();
+    event.returnValue = ''; // required for modern browsers
+  }
+});
 
 // ============================================
 // SERVICE WORKER REGISTRATION (instant offline)
