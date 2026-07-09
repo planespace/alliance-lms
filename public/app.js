@@ -89,7 +89,6 @@ function loadData() {
       const parsed = JSON.parse(cached);
       // Only restore the data collections – don’t touch settings etc.
       appData.librarians = parsed.librarians || [];
-      appData.librarians.forEach(l => recalcAttendancePct(l.id));
       appData.sectors = parsed.sectors || [];
       appData.duties = parsed.duties || [];
       appData.duty_instances = parsed.duty_instances || [];
@@ -99,6 +98,9 @@ function loadData() {
       appData.hall_of_fame_captains = parsed.hall_of_fame_captains || [];
       appData.hall_of_fame_committees = parsed.hall_of_fame_committees || [];
       appData.sector_assignments = parsed.sector_assignments || [];
+
+      // ★ Pre‑compute attendance percentages for all librarians
+      appData.librarians.forEach(l => recalcAttendancePct(l.id));
     } catch (e) {
       /* ignore corrupt cache */
     }
@@ -144,11 +146,13 @@ async function startBackgroundSync() {
 
     const { notifications: _, ...restOfFresh } = fresh;
 
-    // ★★★ ONLY overwrite local data if no save is currently in progress ★★★
+    // Only update the local data if no save is currently in progress
     if (!isSaving) {
       Object.assign(appData, restOfFresh);
-      appData.librarians.forEach(l => recalcAttendancePct(l.id));
       localStorage.setItem(getCacheKey(), JSON.stringify(fresh));
+
+      // ★ Pre‑compute attendance percentages after merging fresh data
+      appData.librarians.forEach(l => recalcAttendancePct(l.id));
     }
 
     // Rebuild the local notification list from the fresh attendance data
