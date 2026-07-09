@@ -3961,6 +3961,7 @@ async function restoreLibrarian(id) {
   if (!lib) return;
   lib.is_deleted = false;
   await saveEntity("librarians", lib, id);
+  recalcAttendancePct(lib.id);   // ★ added – so percentage shows immediately
   renderCurrentPage();
   toast("Restored.");
 }
