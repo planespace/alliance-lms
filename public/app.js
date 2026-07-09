@@ -3285,6 +3285,8 @@ async function toggleAttendanceStatus(recId) {
   rec.confirmed_at = new Date().toISOString();
   rec.confirmed_by = appData.current_user;
   await saveEntity("attendance", rec, rec.id);
+  // ★ Update the librarian’s percentage immediately
+  recalcAttendancePct(rec.librarian_id);
   await generateMissedNotifications();
   updateDutyBadge();
   syncLocalNotifications();
