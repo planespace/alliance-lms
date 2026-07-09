@@ -89,6 +89,7 @@ function loadData() {
       const parsed = JSON.parse(cached);
       // Only restore the data collections – don’t touch settings etc.
       appData.librarians = parsed.librarians || [];
+      appData.librarians.forEach(l => recalcAttendancePct(l.id));
       appData.sectors = parsed.sectors || [];
       appData.duties = parsed.duties || [];
       appData.duty_instances = parsed.duty_instances || [];
@@ -146,6 +147,7 @@ async function startBackgroundSync() {
     // ★★★ ONLY overwrite local data if no save is currently in progress ★★★
     if (!isSaving) {
       Object.assign(appData, restOfFresh);
+      appData.librarians.forEach(l => recalcAttendancePct(l.id));
       localStorage.setItem(getCacheKey(), JSON.stringify(fresh));
     }
 
@@ -330,6 +332,18 @@ function getToday() {
 function getLib(id) {
   return appData.librarians.find((l) => l.id === id);
 }
+function recalcAttendancePct(libId) {
+  const lib = getLib(libId);
+  if (!lib) return;
+  const recs = appData.attendance.filter(a => a.librarian_id === libId);
+  if (!recs.length) {
+    lib.attendancePct = null;
+  } else {
+    const attended = recs.filter(r => r.attended || r.forgiven).length;
+    lib.attendancePct = Math.round((attended / recs.length) * 100);
+  }
+}
+
 function getSector(id) {
   return appData.sectors.find((s) => s.id === id);
 }
@@ -390,10 +404,9 @@ function getLibAttendance(libId) {
   return appData.attendance.filter((a) => a.librarian_id === libId);
 }
 function getAttendancePct(libId) {
-  const recs = getLibAttendance(libId);
-  if (!recs.length) return "N/A";
-  const attended = recs.filter((r) => r.attended || r.forgiven).length;
-  return Math.round((attended / recs.length) * 100);
+  const lib = getLib(libId);
+  if (!lib || lib.attendancePct == null) return "N/A";
+  return lib.attendancePct;
 }
 
 // ============================================
@@ -3076,6 +3089,7 @@ async function selectAllAttendance(instId, attended) {
     r.forgiven = false;
     r.confirmed_at = new Date().toISOString();
     r.confirmed_by = appData.current_user;
+    recalcAttendancePct(r.librarian_id);
   });
 
   renderAttendance();
@@ -3099,12 +3113,16 @@ async function flushAttendanceSaves() {
   attendanceBatchTimer = null;
 
   // Save all in parallel (no loading bar)
-  const promises = recordsToSave.map((r) =>
-    saveEntity("attendance", r, r.id, true).catch((err) =>
+const promises = recordsToSave.map((r) =>
+  saveEntity("attendance", r, r.id, true)
+    .then(() => {
+      recalcAttendancePct(r.librarian_id);
+    })
+    .catch((err) =>
       console.error("Failed to save attendance record", r.id, err)
     )
-  );
-  await Promise.all(promises);
+);
+await Promise.all(promises);
 
   // After all saves, regenerate missed notifications once
   await generateMissedNotifications();
@@ -3124,7 +3142,7 @@ async function toggleSingleAttendance(recordId, checkbox) {
   rec.forgiven = false;
   rec.confirmed_at = new Date().toISOString();
   rec.confirmed_by = appData.current_user;
-
+recalcAttendancePct(rec.librarian_id);
   updateNotificationBadge();
   updateDutyBadge();
   syncLocalNotifications();
@@ -3665,11 +3683,12 @@ function showNotificationActionPopup(notifId) {
 async function forgiveAttendanceRecord(recordId) {
   const rec = appData.attendance.find((a) => a.id === recordId);
   if (!rec) return;
-  rec.attended = true;
-  rec.forgiven = false;
+  rec.attended = false;
+  rec.forgiven = true;
   rec.confirmed_at = new Date().toISOString();
   rec.confirmed_by = appData.current_user;
   await saveEntity("attendance", rec, rec.id);
+  recalcAttendancePct(rec.librarian_id);   // ← added
 }
 
 function issuePunishmentFromNotification(notifId) {
@@ -4591,6 +4610,7 @@ async function saveAttendanceTab(instanceId) {
       rec.confirmed_at = new Date().toISOString();
       rec.confirmed_by = appData.current_user;
       pendingAttendanceSaves.set(rec.id, rec);
+      recalcAttendancePct(rec.librarian_id);
     }
   });
 
