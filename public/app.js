@@ -2688,7 +2688,6 @@ async function saveEditDuty() {
     return;
   }
 
-  // Collect librarian IDs
   let libs = [];
   if (duty.sector_id) {
     libs = getSectorPeople(duty.sector_id).map((p) => p.id);
@@ -2708,7 +2707,9 @@ async function saveEditDuty() {
     "⚠️ Confirm Changes",
     `<p>Editing <strong>${duty.name}</strong> will affect <strong>ALL FUTURE instances</strong>. Past instances remain unchanged.</p>`,
     async () => {
-      // Show a Swal loading modal (overlays everything, clear feedback)
+      // Lock background sync for the entire save sequence
+      isSaving = true;
+      showLoading();
       Swal.fire({
         title: "Saving duty...",
         allowOutsideClick: false,
@@ -2728,23 +2729,19 @@ async function saveEditDuty() {
         duty.is_punishment = isPunishment;
         duty.updated_at = new Date().toISOString();
 
-        // 2. Delete all future instances AND their attendance records
+        // 2. Delete all future instances and their attendance
         const futureInsts = appData.duty_instances.filter(
           (di) => di.duty_id === duty.id && di.date >= getToday()
         );
 
         for (const inst of futureInsts) {
-          // Delete attendance records for this instance first
           await deleteEntity("attendance/by-instance", inst.id);
-          // Remove from local cache immediately
           appData.attendance = appData.attendance.filter(
             (a) => a.duty_instance_id !== inst.id
           );
-          // Delete the instance itself
           await deleteEntity("duties/instances", inst.id);
         }
 
-        // Remove future instances from local cache
         appData.duty_instances = appData.duty_instances.filter(
           (di) => !(di.duty_id === duty.id && di.date >= getToday())
         );
@@ -2752,7 +2749,7 @@ async function saveEditDuty() {
         // 3. Save the updated duty
         await saveEntity("duties", duty, duty.id);
 
-        // 4. Create today's instance with the NEWLY SELECTED librarians
+        // 4. Create today's instance with the new librarian set
         const today = getToday();
         if (dutyOccursOnDate(duty, today)) {
           const newInst = {
@@ -2779,7 +2776,7 @@ async function saveEditDuty() {
           }
         }
 
-        Swal.close(); // close the loading swal
+        Swal.close();
         closeModal("editDutyModal");
         renderCurrentPage();
         updateDutyBadge();
@@ -2788,6 +2785,9 @@ async function saveEditDuty() {
         Swal.close();
         console.error(err);
         toast("Error saving duty. Please try again.");
+      } finally {
+        isSaving = false;
+        hideLoading();
       }
     }
   );
