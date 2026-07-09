@@ -3099,6 +3099,7 @@ async function selectAllAttendance(instId, attended) {
     r.forgiven = false;
     r.confirmed_at = new Date().toISOString();
     r.confirmed_by = appData.current_user;
+    recalcAttendancePct(r.librarian_id);   // ★
   });
 
   renderAttendance();
@@ -3114,7 +3115,6 @@ async function selectAllAttendance(instId, attended) {
 
   if (attendanceBatchTimer) clearTimeout(attendanceBatchTimer);
   attendanceBatchTimer = setTimeout(flushAttendanceSaves, 300);
-  showLoading();   // ★ show loading bar while the batch timer waits
 }
 
 async function flushAttendanceSaves() {
@@ -3122,18 +3122,18 @@ async function flushAttendanceSaves() {
   pendingAttendanceSaves.clear();
   attendanceBatchTimer = null;
 
-  // Save all in parallel (no loading bar)
   const promises = recordsToSave.map((r) =>
-    saveEntity("attendance", r, r.id, true).catch((err) =>
-      console.error("Failed to save attendance record", r.id, err)
-    )
+    saveEntity("attendance", r, r.id, true)
+      .then(() => {
+        recalcAttendancePct(r.librarian_id);   // ★ update after successful save
+      })
+      .catch((err) =>
+        console.error("Failed to save attendance record", r.id, err)
+      )
   );
   await Promise.all(promises);
 
-  // After all saves, regenerate missed notifications once
   await generateMissedNotifications();
-
-  hideLoading();   // ★ hide loading bar – saving is complete
 }
 
 async function toggleSingleAttendance(recordId, checkbox) {
@@ -3151,6 +3151,9 @@ async function toggleSingleAttendance(recordId, checkbox) {
   rec.confirmed_at = new Date().toISOString();
   rec.confirmed_by = appData.current_user;
 
+  // ★ Update the pre‑computed percentage instantly
+  recalcAttendancePct(rec.librarian_id);
+
   updateNotificationBadge();
   updateDutyBadge();
   syncLocalNotifications();
@@ -3162,7 +3165,6 @@ async function toggleSingleAttendance(recordId, checkbox) {
 
   if (attendanceBatchTimer) clearTimeout(attendanceBatchTimer);
   attendanceBatchTimer = setTimeout(flushAttendanceSaves, 300);
-  showLoading();   // ★ show loading bar while the batch timer waits
 
   toast(newChecked ? "✅ Present" : "❌ Absent");
 }
@@ -4596,6 +4598,7 @@ async function selectAllAttendanceTab(instanceId, sel) {
     r.confirmed_at = new Date().toISOString();
     r.confirmed_by = appData.current_user;
     pendingAttendanceSaves.set(r.id, r);
+    recalcAttendancePct(r.librarian_id);   // ★
   });
 
   renderAttendanceModal();
@@ -4621,7 +4624,7 @@ async function saveAttendanceTab(instanceId) {
       rec.confirmed_at = new Date().toISOString();
       rec.confirmed_by = appData.current_user;
       pendingAttendanceSaves.set(rec.id, rec);
-      recalcAttendancePct(rec.librarian_id);
+      recalcAttendancePct(rec.librarian_id);   // ★
     }
   });
 
