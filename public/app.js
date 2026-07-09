@@ -3099,8 +3099,11 @@ async function selectAllAttendance(instId, attended) {
     r.forgiven = false;
     r.confirmed_at = new Date().toISOString();
     r.confirmed_by = appData.current_user;
-    recalcAttendancePct(r.librarian_id);   // ★
+    recalcAttendancePct(r.librarian_id);
   });
+
+  // ★ Write to localStorage immediately
+  saveData();
 
   renderAttendance();
   updateDutyBadge();
@@ -3115,6 +3118,7 @@ async function selectAllAttendance(instId, attended) {
 
   if (attendanceBatchTimer) clearTimeout(attendanceBatchTimer);
   attendanceBatchTimer = setTimeout(flushAttendanceSaves, 300);
+  showLoading();
 }
 
 async function flushAttendanceSaves() {
@@ -3141,7 +3145,7 @@ async function flushAttendanceSaves() {
   }
 
   await generateMissedNotifications();
-  hideLoading();
+  hideLoading();   // hide loading bar after all saves complete
 }
 
 async function toggleSingleAttendance(recordId, checkbox) {
@@ -3159,8 +3163,11 @@ async function toggleSingleAttendance(recordId, checkbox) {
   rec.confirmed_at = new Date().toISOString();
   rec.confirmed_by = appData.current_user;
 
-  // ★ Update the pre‑computed percentage instantly
+  // ★ Update the percentage instantly
   recalcAttendancePct(rec.librarian_id);
+
+  // ★ Write the change to localStorage immediately (survives refresh)
+  saveData();
 
   updateNotificationBadge();
   updateDutyBadge();
@@ -3173,6 +3180,7 @@ async function toggleSingleAttendance(recordId, checkbox) {
 
   if (attendanceBatchTimer) clearTimeout(attendanceBatchTimer);
   attendanceBatchTimer = setTimeout(flushAttendanceSaves, 300);
+  showLoading();   // show loading bar while the batch timer waits
 
   toast(newChecked ? "✅ Present" : "❌ Absent");
 }
