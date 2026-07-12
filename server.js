@@ -19,6 +19,7 @@ const attendanceRouter = require("./routes/attendance");
 const tagsRouter = require("./routes/tags");
 const notificationsRouter = require("./routes/notifications");
 const halloffameRouter = require("./routes/halloffame");
+
 // Import models for the combined endpoint
 const Librarian = require("./models/Librarian");
 const Sector = require("./models/Sector");
@@ -29,6 +30,7 @@ const Tag = require("./models/Tag");
 const Notification = require("./models/Notification");
 const { Captain, Committee } = require("./models/HallOfFame");
 const SectorAssignment = require("./models/SectorAssignment");
+
 const app = express();
 const compression = require("compression");
 
@@ -71,12 +73,11 @@ app.use("/api/attendance", attendanceRouter);
 app.use("/api/tags", tagsRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/halloffame", halloffameRouter);
+
 // Combined endpoint – returns all data in a single request
-// Combined endpoint – returns only necessary fields for speed
-// Combined endpoint – returns only necessary fields for speed, scoped to current user
+// ⚠️ Cache-Control header REMOVED to prevent stale data after updates
 app.get("/api/all", protect, async (req, res) => {
   try {
-    res.set("Cache-Control", "private, max-age=120");
     const userId = req.user._id;
     const [
       librarians,
@@ -137,6 +138,7 @@ app.get("/api/all", protect, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 app.get("/ping", (req, res) => res.send("ok"));
 
 // Serve frontend for any other route (SPA fallback)
