@@ -895,6 +895,14 @@ async function openModal(id) {
 function closeModal(id) {
   const modal = document.getElementById(id);
   if (modal) modal.classList.remove("active");
+
+  // If we just closed the attendance history modal, refresh
+  // the current page so the dashboard table shows the latest
+  // attendance percentages.
+  if (id === "attendanceHistoryModal") {
+    renderCurrentPage();
+  }
+
   if (id === "sectorModal") {
     const body = document.querySelector("#sectorModal .modal-body");
     const footer = document.querySelector("#sectorModal .modal-footer");
