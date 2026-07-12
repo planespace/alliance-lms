@@ -3296,21 +3296,36 @@ function viewAttendanceHistory(libId) {
 async function toggleAttendanceStatus(recId) {
   const rec = appData.attendance.find((a) => a.id === recId);
   if (!rec) return;
+
+  // Optimistic toggle – update local data immediately
   rec.attended = !rec.attended;
   rec.forgiven = false;
   rec.confirmed_at = new Date().toISOString();
   rec.confirmed_by = appData.current_user;
-  await saveEntity("attendance", rec, rec.id);
-  // ★ Update the librarian’s percentage immediately
+
+  // Recalculate the percentage instantly
   recalcAttendancePct(rec.librarian_id);
-  await generateMissedNotifications();
-  updateDutyBadge();
-  syncLocalNotifications();
-  if (currentPage === "notifications") {
-    renderNotifications();
-  }
+
+  // Refresh only the attendance history modal (no full page render)
   viewAttendanceHistory(rec.librarian_id);
-  renderCurrentPage();
+
+  // Fire‑and‑forget server save – will update UI again if needed
+  try {
+    await saveEntity("attendance", rec, rec.id);
+    await generateMissedNotifications();
+    syncLocalNotifications();
+    updateDutyBadge();
+    // Refresh the modal again after server confirms
+    viewAttendanceHistory(rec.librarian_id);
+  } catch (err) {
+    console.error("Failed to save attendance status", err);
+    toast("⚠️ Failed to save change – reverted.");
+    // Revert the optimistic change and refresh
+    rec.attended = !rec.attended;
+    rec.forgiven = false;
+    recalcAttendancePct(rec.librarian_id);
+    viewAttendanceHistory(rec.librarian_id);
+  }
 }
 
 // ============================================
