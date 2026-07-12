@@ -3303,28 +3303,35 @@ async function toggleAttendanceStatus(recId) {
   rec.confirmed_at = new Date().toISOString();
   rec.confirmed_by = appData.current_user;
 
-  // Recalculate the percentage instantly
+  // Recalculate the percentage instantly (dashboard will see it next time it renders)
   recalcAttendancePct(rec.librarian_id);
 
-  // Refresh only the attendance history modal (no full page render)
+  // Refresh the attendance history modal **right now** so the change is visible
   viewAttendanceHistory(rec.librarian_id);
 
-  // Fire‑and‑forget server save – will update UI again if needed
+  // Save to server in the background
   try {
     await saveEntity("attendance", rec, rec.id);
     await generateMissedNotifications();
     syncLocalNotifications();
     updateDutyBadge();
-    // Refresh the modal again after server confirms
-    viewAttendanceHistory(rec.librarian_id);
+    // If the modal is still open, refresh it again to reflect final server state
+    const modal = document.getElementById("attendanceHistoryModal");
+    if (modal && modal.classList.contains("active")) {
+      viewAttendanceHistory(rec.librarian_id);
+    }
   } catch (err) {
     console.error("Failed to save attendance status", err);
     toast("⚠️ Failed to save change – reverted.");
-    // Revert the optimistic change and refresh
+    // Revert the optimistic change
     rec.attended = !rec.attended;
     rec.forgiven = false;
     recalcAttendancePct(rec.librarian_id);
-    viewAttendanceHistory(rec.librarian_id);
+    // Refresh the modal only if it’s still open
+    const modal = document.getElementById("attendanceHistoryModal");
+    if (modal && modal.classList.contains("active")) {
+      viewAttendanceHistory(rec.librarian_id);
+    }
   }
 }
 
