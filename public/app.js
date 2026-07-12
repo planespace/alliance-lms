@@ -5955,9 +5955,20 @@ async function generateDutyInstancesForDate(date) {
       appData.duty_instances.push(savedInst);
 
       let libIds = [];
-      const templateInst = appData.duty_instances.find(
+      
+      // ★ Use the MOST RECENT instance (by date) as the template,
+      // ★ not the first one found. This ensures that edits to
+      // ★ today's librarians are correctly propagated to future dates.
+      const allOtherInstances = appData.duty_instances.filter(
         (di) => di.duty_id === duty.id && di.id !== savedInst.id
       );
+      let templateInst = null;
+      if (allOtherInstances.length > 0) {
+        templateInst = allOtherInstances.reduce((latest, inst) => {
+          return inst.date > latest.date ? inst : latest;
+        }, allOtherInstances[0]);
+      }
+
       if (templateInst) {
         const templateRecords = appData.attendance.filter(
           (a) => a.duty_instance_id === templateInst.id
@@ -5966,6 +5977,7 @@ async function generateDutyInstancesForDate(date) {
       } else if (duty.sector_id) {
         libIds = getSectorPeople(duty.sector_id).map((p) => p.id);
       }
+      
       for (const libId of libIds) {
         const att = {
           duty_instance_id: savedInst.id,
@@ -5979,7 +5991,7 @@ async function generateDutyInstancesForDate(date) {
         // ★ silent save – no loading bar
         const savedAtt = await saveEntity("attendance", att, null, true);
         appData.attendance.push(savedAtt);
-        recalcAttendancePct(libId); 
+        recalcAttendancePct(libId);
       }
     }
   }
