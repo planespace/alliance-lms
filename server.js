@@ -146,5 +146,17 @@ app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
+// GET all tag history for the current user
+router.get("/history", async (req, res) => {
+  try {
+    const history = await TagHistory.find({ user_id: req.user._id })
+      .sort({ removed_at: -1 })
+      .lean();
+    res.json(history);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

@@ -153,6 +153,17 @@ async function startBackgroundSync() {
 
       // ★ Pre‑compute attendance percentages after merging fresh data
       appData.librarians.forEach(l => recalcAttendancePct(l.id));
+
+      // ★ Fetch tag history (not included in /api/all)
+      try {
+        const historyRes = await fetch(`${API_BASE}/tags/history`, { headers });
+        if (historyRes.ok) {
+          const historyData = await historyRes.json();
+          appData.tag_history = historyData.map(h => ({ ...h, id: h._id }));
+        }
+      } catch (e) {
+        console.error("Failed to load tag history", e);
+      }
     }
 
     // Rebuild the local notification list from the fresh attendance data
@@ -378,7 +389,7 @@ async function cleanExpiredTags() {
 
   for (const t of expired) {
     await deleteEntity("tags", t.id, true);
-    await saveEntity(
+    const savedHistory = await saveEntity(
       "tags/history",
       {
         tag_id: t.id,
@@ -394,22 +405,11 @@ async function cleanExpiredTags() {
       null,
       true
     );
-
-    // ★ Push the history entry locally so it shows up immediately
-    appData.tag_history.push({
-      tag_id: t.id,
-      librarian_id: t.librarian_id,
-      tag_name: t.name,
-      description: t.description,
-      type: t.type,
-      start_date: t.start_date,
-      end_date: t.end_date,
-      removed_at: new Date().toISOString(),
-      removal_reason: "auto_expired",
-    });
+    // Push the saved history entry with the real server ID
+    appData.tag_history.push({ ...savedHistory, id: savedHistory._id });
   }
 
-  // ★ Persist the updated tag and history arrays
+  // Persist the updated tag and history arrays
   saveData();
 }
 
