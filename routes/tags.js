@@ -67,15 +67,15 @@ router.delete("/:id", async (req, res) => {
   }
 });
 
-// Tag history
-router.post("/history", async (req, res) => {
+// GET all tag history for the current user
+router.get("/history", async (req, res) => {
   try {
-    const historyData = { ...req.body, user_id: req.user._id };
-    const history = new TagHistory(historyData);
-    await history.save();
-    res.status(201).json(history);
+    const history = await TagHistory.find({ user_id: req.user._id })
+      .sort({ removed_at: -1 })
+      .lean();
+    res.json(history);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    res.status(500).json({ error: err.message });
   }
 });
 
