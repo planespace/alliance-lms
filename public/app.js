@@ -307,7 +307,6 @@ function saveData() {
   localStorage.setItem("settings", JSON.stringify(appData.settings));
   updateNotificationBadge();
 
-  // Keep the persistent cache up‑to‑date after every change
   const cacheCopy = {
     librarians: appData.librarians,
     sectors: appData.sectors,
@@ -315,6 +314,7 @@ function saveData() {
     duty_instances: appData.duty_instances,
     attendance: appData.attendance,
     tags: appData.tags,
+    tag_history: appData.tag_history,   // ★ added
     notifications: appData.notifications,
     hall_of_fame_captains: appData.hall_of_fame_captains,
     hall_of_fame_committees: appData.hall_of_fame_committees,
@@ -375,6 +375,7 @@ async function cleanExpiredTags() {
     return true;
   });
   if (expired.length === 0) return;
+
   for (const t of expired) {
     await deleteEntity("tags", t.id, true);
     await saveEntity(
@@ -393,7 +394,23 @@ async function cleanExpiredTags() {
       null,
       true
     );
+
+    // ★ Push the history entry locally so it shows up immediately
+    appData.tag_history.push({
+      tag_id: t.id,
+      librarian_id: t.librarian_id,
+      tag_name: t.name,
+      description: t.description,
+      type: t.type,
+      start_date: t.start_date,
+      end_date: t.end_date,
+      removed_at: new Date().toISOString(),
+      removal_reason: "auto_expired",
+    });
   }
+
+  // ★ Persist the updated tag and history arrays
+  saveData();
 }
 
 function getLibTags(libId) {
@@ -1737,7 +1754,7 @@ async function deleteTagFromModal() {
     "Delete Tag",
     `<p>Delete "<strong>${tag.name}</strong>"?</p>`,
     async () => {
-      tag.is_active = false;
+            tag.is_active = false;
       tag.removed_at = new Date().toISOString();
       await saveEntity("tags", tag, tag.id);
       appData.tag_history.push({
@@ -1751,6 +1768,7 @@ async function deleteTagFromModal() {
         removed_at: tag.removed_at,
         removal_reason: "manual_delete",
       });
+      saveData();   // ★ persist the history
       renderCurrentPage();
       toast("Tag removed.");
     }
@@ -4893,6 +4911,7 @@ async function quickDeleteTag(tagId) {
     removed_at: tag.removed_at,
     removal_reason: "manual_delete",
   });
+  saveData();   // ★ persist the history
   renderCurrentPage();
   toast("Tag removed.");
 }
