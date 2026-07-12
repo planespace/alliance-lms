@@ -87,23 +87,20 @@ function loadData() {
   if (cached) {
     try {
       const parsed = JSON.parse(cached);
-      // Only restore the data collections – don’t touch settings etc.
       appData.librarians = parsed.librarians || [];
       appData.sectors = parsed.sectors || [];
       appData.duties = parsed.duties || [];
       appData.duty_instances = parsed.duty_instances || [];
       appData.attendance = parsed.attendance || [];
       appData.tags = parsed.tags || [];
+      appData.tag_history = parsed.tag_history || [];   // ★
       appData.notifications = parsed.notifications || [];
       appData.hall_of_fame_captains = parsed.hall_of_fame_captains || [];
       appData.hall_of_fame_committees = parsed.hall_of_fame_committees || [];
       appData.sector_assignments = parsed.sector_assignments || [];
 
-      // ★ Pre‑compute attendance percentages for all librarians
       appData.librarians.forEach(l => recalcAttendancePct(l.id));
-    } catch (e) {
-      /* ignore corrupt cache */
-    }
+    } catch (e) { /* ignore corrupt cache */ }
   }
 }
 
@@ -112,49 +109,29 @@ async function startBackgroundSync() {
   if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
 
   try {
-    const data = await fetch(`${API_BASE}/all`, { headers }).then((r) =>
-      r.json()
-    );
+    const data = await fetch(`${API_BASE}/all`, { headers }).then((r) => r.json());
 
     const fresh = {
-      librarians: (data.librarians || []).map((l) => ({ ...l, id: l._id })),
-      sectors: (data.sectors || []).map((s) => ({ ...s, id: s._id })),
-      duties: (data.duties || []).map((d) => ({ ...d, id: d._id })),
-      duty_instances: (data.dutyInstances || []).map((di) => ({
-        ...di,
-        id: di._id,
-      })),
-      attendance: (data.attendance || []).map((a) => ({ ...a, id: a._id })),
-      tags: (data.tags || []).map((t) => ({ ...t, id: t._id })),
-      notifications: (data.notifications || []).map((n) => ({
-        ...n,
-        id: n._id,
-      })),
-      hall_of_fame_captains: (data.captains || []).map((c) => ({
-        ...c,
-        id: c._id,
-      })),
-      hall_of_fame_committees: (data.committees || []).map((c) => ({
-        ...c,
-        id: c._id,
-      })),
-      sector_assignments: (data.assignments || []).map((a) => ({
-        ...a,
-        id: a._id,
-      })),
+      librarians: (data.librarians || []).map(l => ({ ...l, id: l._id })),
+      sectors: (data.sectors || []).map(s => ({ ...s, id: s._id })),
+      duties: (data.duties || []).map(d => ({ ...d, id: d._id })),
+      duty_instances: (data.dutyInstances || []).map(di => ({ ...di, id: di._id })),
+      attendance: (data.attendance || []).map(a => ({ ...a, id: a._id })),
+      tags: (data.tags || []).map(t => ({ ...t, id: t._id })),
+      notifications: (data.notifications || []).map(n => ({ ...n, id: n._id })),
+      hall_of_fame_captains: (data.captains || []).map(c => ({ ...c, id: c._id })),
+      hall_of_fame_committees: (data.committees || []).map(c => ({ ...c, id: c._id })),
+      sector_assignments: (data.assignments || []).map(a => ({ ...a, id: a._id })),
     };
 
     const { notifications: _, ...restOfFresh } = fresh;
 
-    // Only update the local data if no save is currently in progress
     if (!isSaving) {
       Object.assign(appData, restOfFresh);
       localStorage.setItem(getCacheKey(), JSON.stringify(fresh));
-
-      // ★ Pre‑compute attendance percentages after merging fresh data
       appData.librarians.forEach(l => recalcAttendancePct(l.id));
 
-      // ★ Fetch tag history (not included in /api/all)
+      // ★ Fetch tag history
       try {
         const historyRes = await fetch(`${API_BASE}/tags/history`, { headers });
         if (historyRes.ok) {
@@ -166,14 +143,10 @@ async function startBackgroundSync() {
       }
     }
 
-    // Rebuild the local notification list from the fresh attendance data
     syncLocalNotifications();
-
-    // Update badges silently
     updateDutyBadge();
     updateNotificationBadge();
 
-    // Re‑render the current page, but skip if the user is viewing notifications
     if (currentPage !== "notifications") {
       renderCurrentPage();
     }
@@ -325,7 +298,7 @@ function saveData() {
     duty_instances: appData.duty_instances,
     attendance: appData.attendance,
     tags: appData.tags,
-    tag_history: appData.tag_history,   // ★ added
+    tag_history: appData.tag_history,   // ★
     notifications: appData.notifications,
     hall_of_fame_captains: appData.hall_of_fame_captains,
     hall_of_fame_committees: appData.hall_of_fame_committees,
@@ -405,11 +378,10 @@ async function cleanExpiredTags() {
       null,
       true
     );
-    // Push the saved history entry with the real server ID
+    // Push the server-saved object with real _id
     appData.tag_history.push({ ...savedHistory, id: savedHistory._id });
   }
 
-  // Persist the updated tag and history arrays
   saveData();
 }
 
@@ -4947,7 +4919,7 @@ function viewTagHistoryDetails(historyId) {
 
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay active";
-  overlay.id = "tagHistoryDetailModal";   // ★ give the overlay a fixed id
+  overlay.id = "tagHistoryDetailModal";
   overlay.style.zIndex = modalZIndex + 10;
   overlay.innerHTML = `
     <div class="modal" style="max-width:450px; z-index:${modalZIndex + 11};">
@@ -4989,10 +4961,10 @@ async function deleteTagHistoryEntry(historyId) {
         appData.tag_history = appData.tag_history.filter((t) => t.id !== historyId);
         saveData();
 
-        // Close the detail modal if it is still open (safe, won't throw if not open)
+        // Close the detail modal safely (no DOM removal)
         closeModal("tagHistoryDetailModal");
 
-        // Refresh the tag history popup using the stored librarian ID
+        // Refresh the action popup if it's open
         if (window._lastTagHistoryLibId) {
           viewTagHistoryForLibrarian(window._lastTagHistoryLibId);
         }
