@@ -4919,20 +4919,96 @@ async function quickDeleteTag(tagId) {
 function viewTagHistoryHtml(libId) {
   const history = appData.tag_history.filter((h) => h.librarian_id === libId);
   if (!history.length) return "No previous tags.";
+
   return history
     .map(
       (h) => `
-    <div style="display:flex; justify-content:space-between; padding:6px 10px; background:#f8fafc; border-radius:6px; margin-bottom:4px;">
-      <span><strong>${h.tag_name}</strong> (${h.type})</span>
-      <span class="text-muted" style="font-size:12px;">${formatDate(
-        h.start_date
-      )} – ${h.end_date ? formatDate(h.end_date) : "Forever"}</span>
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 10px; background:#f8fafc; border-radius:6px; margin-bottom:4px;">
+      <div>
+        <span><strong>${h.tag_name}</strong> (${h.type})</span>
+        <span class="text-muted" style="font-size:12px; margin-left:8px;">${formatDate(
+          h.start_date
+        )} – ${h.end_date ? formatDate(h.end_date) : "Forever"}</span>
+        <span style="font-size:12px; color:var(--text-secondary); margin-left:8px;">Removed: ${h.removal_reason}</span>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button class="btn btn-secondary btn-sm" onclick="viewTagHistoryDetails('${h.id}')">🔍 View</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteTagHistoryEntry('${h.id}')">🗑</button>
+      </div>
     </div>`
     )
     .join("");
 }
 
+function viewTagHistoryDetails(historyId) {
+  const h = appData.tag_history.find((t) => t.id === historyId);
+  if (!h) return;
+  const lib = getLib(h.librarian_id);
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay active";
+  overlay.style.zIndex = modalZIndex + 10;
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:450px; z-index:${modalZIndex + 11};">
+      <div class="modal-header"><h3>🏷️ Tag History Details</h3><button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button></div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:12px;">
+        <div style="background:#f8fafc; padding:12px; border-radius:8px;">
+          <div><strong>Tag Name:</strong> ${h.tag_name}</div>
+          <div><strong>Type:</strong> ${h.type}</div>
+          <div><strong>Librarian:</strong> ${lib ? lib.name : "Unknown"}</div>
+          <div><strong>Description:</strong> ${h.description || "—"}</div>
+        </div>
+        <div style="background:#f8fafc; padding:12px; border-radius:8px;">
+          <div><strong>Start Date:</strong> ${formatDate(h.start_date)}</div>
+          <div><strong>End Date:</strong> ${h.end_date ? formatDate(h.end_date) : "Forever"}</div>
+        </div>
+        <div style="background:#f8fafc; padding:12px; border-radius:8px;">
+          <div><strong>Removed:</strong> ${formatDate(h.removed_at)}</div>
+          <div><strong>Reason:</strong> ${h.removal_reason || "Unknown"}</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Close</button>
+        <button class="btn btn-danger" onclick="deleteTagHistoryEntry('${h.id}'); this.closest('.modal-overlay').remove();">🗑 Delete</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function deleteTagHistoryEntry(historyId) {
+  showConfirm(
+    "Delete Tag History",
+    "Permanently delete this history entry?",
+    async () => {
+      try {
+        await deleteEntity("tags/history", historyId);
+        appData.tag_history = appData.tag_history.filter((t) => t.id !== historyId);
+        saveData();
+        // Refresh any open tag history popup
+        const popup = document.getElementById("actionPopup");
+        if (popup && popup.classList.contains("active")) {
+          // Rebuild the tag history view for the currently displayed librarian
+          // We need to know which librarian is being viewed – we can store it globally.
+          // For simplicity, just close the popup and re‑open it if needed.
+          // We'll use a global variable to track the last viewed librarian's tag history.
+          if (window._lastTagHistoryLibId) {
+            viewTagHistoryForLibrarian(window._lastTagHistoryLibId);
+          }
+        }
+        // Also close any detail modal if open
+        document.querySelectorAll(".modal-overlay.active").forEach(m => m.remove());
+        renderCurrentPage();
+        toast("History entry deleted.");
+      } catch (err) {
+        console.error(err);
+        toast("Failed to delete history.");
+      }
+    }
+  );
+}
+
 function viewTagHistoryForLibrarian(libId) {
+  window._lastTagHistoryLibId = libId;
   document.getElementById("actionPopupTitle").textContent = "📜 Tag History";
   document.getElementById("actionPopupContent").innerHTML =
     viewTagHistoryHtml(libId);

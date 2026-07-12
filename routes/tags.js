@@ -78,5 +78,17 @@ router.get("/history", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// DELETE a tag history entry
+router.delete("/history/:id", async (req, res) => {
+  try {
+    await TagHistory.findOneAndDelete({
+      _id: req.params.id,
+      user_id: req.user._id,
+    });
+    res.json({ message: "History entry deleted" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 module.exports = router;
