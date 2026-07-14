@@ -3261,9 +3261,13 @@ function viewAttendanceHistory(libId) {
           rowColors[idx % 2]
         }; border-radius:4px;">
           <div>
-            <span style="font-weight:600; font-size:14px;">${
-              duty ? duty.name : "Unknown Duty"
-            }</span>
+         <div>
+  <span style="font-weight:600; font-size:14px;">${duty ? duty.name : "Unknown Duty"}</span>
+  ${duty ? `<span style="font-size:11px; color:var(--text-muted); margin-left:6px;">(${duty.sector_id ? getSectorPath(duty.sector_id) : "Standalone"})</span>` : ''}
+  <span style="font-size:13px; color:var(--text-secondary); margin-left:8px;">${duty ? formatTime(duty.start_time) + " - " + formatTime(duty.end_time) : ""}</span>
+  ${r.forgiven ? '<span style="font-size:12px; color:#b45309; background:#fef3c7; padding:0 6px; border-radius:8px; margin-left:4px;">Forgiven</span>' : ''}
+  ${r.punishment_issued ? '<span style="font-size:12px; color:#b91c1c; background:#fee2e2; padding:0 6px; border-radius:8px; margin-left:4px;">Punished</span>' : ''}
+</div>
             <span style="font-size:13px; color:var(--text-secondary); margin-left:8px;">${
               duty
                 ? formatTime(duty.start_time) +
@@ -5714,6 +5718,7 @@ ${sectorLine}
     })
     .join("");
 }
+
 function syncLocalNotifications() {
   // Build the entire local notification list from the current attendance state
   const missedRecords = appData.attendance.filter((a) => {
