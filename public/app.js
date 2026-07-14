@@ -5680,6 +5680,19 @@ if (isCalendarView) {
           ).length,
         0
       );
+
+      // ---- minimal sector path addition ----
+      let sectorLine = '';
+      if (d.sector_id) {
+        const path = getSectorPath(d.sector_id);
+        if (path) {
+          sectorLine = `<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">📂 ${path}</div>`;
+        }
+      } else {
+        sectorLine = `<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">📌 Standalone</div>`;
+      }
+      // ------------------------------------
+
       return `<div class="duty-card ${d.is_punishment ? "punishment" : ""}">
       <div class="duty-header">
         <div>
@@ -5688,6 +5701,7 @@ if (isCalendarView) {
   ${d.end_date && d.end_date < getToday() ? '<span class="tag-badge punishment" style="margin-left:6px;">Ended</span>' : ''}
 </span>
 <span class="duty-meta">${formatTime(d.start_time)}-${formatTime(d.end_time)} · ${d.days.map(getDayName).join(", ")}</span>
+${sectorLine}
         </div>
         <div class="duty-actions">
           <span>${attended}/${total} attended</span>
@@ -5700,7 +5714,6 @@ if (isCalendarView) {
     })
     .join("");
 }
-
 function syncLocalNotifications() {
   // Build the entire local notification list from the current attendance state
   const missedRecords = appData.attendance.filter((a) => {
