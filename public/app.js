@@ -3302,6 +3302,57 @@ function viewAttendanceHistory(libId) {
   openModal("attendanceHistoryModal");
 }
 
+async function fullSyncDutyInstancesForSector(secId) {
+  const duties = appData.duties.filter(d => d.sector_id === secId);
+  const today = getToday();
+  const sectorPeople = getSectorPeople(secId).map(p => p.id);
+
+  for (const duty of duties) {
+    const futureInstances = appData.duty_instances.filter(
+      di => di.duty_id === duty.id && di.date >= today
+    );
+
+    for (const inst of futureInstances) {
+      // Get current attendance for this instance
+      const currentLibIds = appData.attendance
+        .filter(a => a.duty_instance_id === inst.id)
+        .map(a => a.librarian_id);
+
+      // Remove attendance for librarians no longer in the sector
+      const toRemove = currentLibIds.filter(id => !sectorPeople.includes(id));
+      for (const libId of toRemove) {
+        const attRecord = appData.attendance.find(
+          a => a.duty_instance_id === inst.id && a.librarian_id === libId
+        );
+        if (attRecord) {
+          await deleteEntity("attendance", attRecord.id);
+          appData.attendance = appData.attendance.filter(a => a.id !== attRecord.id);
+          recalcAttendancePct(libId);
+        }
+      }
+
+      // Add missing librarians
+      const toAdd = sectorPeople.filter(id => !currentLibIds.includes(id));
+      for (const libId of toAdd) {
+        if (!appData.attendance.some(a => a.duty_instance_id === inst.id && a.librarian_id === libId)) {
+          const att = {
+            duty_instance_id: inst.id,
+            librarian_id: libId,
+            attended: false,
+            confirmed_by: "system",
+            confirmed_at: new Date().toISOString(),
+            forgiven: false,
+            punishment_issued: false,
+          };
+          const savedAtt = await saveEntity("attendance", att);
+          appData.attendance.push(savedAtt);
+          recalcAttendancePct(libId);
+        }
+      }
+    }
+  }
+}
+
 async function toggleAttendanceStatus(recId) {
   const rec = appData.attendance.find((a) => a.id === recId);
   if (!rec) return;
@@ -3890,15 +3941,14 @@ async function runAutoAssign() {
       }
     }
 
-    // ★ Sync duty instances for every leaf sector – also ensure today's instance exists
+    // ★ FULL SYNC: ensure today's instance exists and then sync all future instances
     const today = getToday();
     for (const s of leafSectors) {
-      // Create today's duty instance if it doesn't exist (needed for immediate attendance)
-      const duties = appData.duties.filter((d) => d.sector_id === s.id);
+      const duties = appData.duties.filter(d => d.sector_id === s.id);
       for (const duty of duties) {
         if (dutyOccursOnDate(duty, today)) {
           const exists = appData.duty_instances.some(
-            (di) => di.duty_id === duty.id && di.date === today
+            di => di.duty_id === duty.id && di.date === today
           );
           if (!exists) {
             const newInst = {
@@ -3909,27 +3959,11 @@ async function runAutoAssign() {
             };
             const savedInst = await saveEntity("duties/instances", newInst);
             appData.duty_instances.push(savedInst);
-            const peopleIds = getSectorPeople(s.id).map((p) => p.id);
-            for (const libId of peopleIds) {
-              if (!appData.attendance.some(a => a.duty_instance_id === savedInst.id && a.librarian_id === libId)) {
-                const att = {
-                  duty_instance_id: savedInst.id,
-                  librarian_id: libId,
-                  attended: false,
-                  confirmed_by: "system",
-                  confirmed_at: new Date().toISOString(),
-                  forgiven: false,
-                  punishment_issued: false,
-                };
-                const savedAtt = await saveEntity("attendance", att);
-                appData.attendance.push(savedAtt);
-                recalcAttendancePct(libId);
-              }
-            }
           }
         }
       }
-      await syncDutyInstancesForSector(s.id);
+      // Full sync (add missing, remove extras) for all future instances
+      await fullSyncDutyInstancesForSector(s.id);
     }
 
     saveData();
