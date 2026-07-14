@@ -880,6 +880,13 @@ async function openModal(id) {
       .querySelectorAll("#bulkBody .bulk-joined")
       .forEach((inp) => (inp.value = getToday()));
   }
+
+  // ★ Auto‑assign modal – make sure the multi‑select list is ready
+  if (id === "autoAssignModal") {
+    if (document.getElementById("autoAssignMulti").checked) {
+      populateMultiSelect();
+    }
+  }
 }
 function closeModal(id) {
   const modal = document.getElementById(id);
@@ -3879,8 +3886,45 @@ async function runAutoAssign() {
       }
     }
 
-    // ★ Sync duty instances for every leaf sector (adds missing attendance records)
+    // ★ Sync duty instances for every leaf sector – also ensure today's instance exists
+    const today = getToday();
     for (const s of leafSectors) {
+      // Create today's duty instance if it doesn't exist (needed for immediate attendance)
+      const duties = appData.duties.filter((d) => d.sector_id === s.id);
+      for (const duty of duties) {
+        if (dutyOccursOnDate(duty, today)) {
+          const exists = appData.duty_instances.some(
+            (di) => di.duty_id === duty.id && di.date === today
+          );
+          if (!exists) {
+            const newInst = {
+              duty_id: duty.id,
+              date: today,
+              is_active: true,
+              created_at: new Date().toISOString(),
+            };
+            const savedInst = await saveEntity("duties/instances", newInst);
+            appData.duty_instances.push(savedInst);
+            const peopleIds = getSectorPeople(s.id).map((p) => p.id);
+            for (const libId of peopleIds) {
+              if (!appData.attendance.some(a => a.duty_instance_id === savedInst.id && a.librarian_id === libId)) {
+                const att = {
+                  duty_instance_id: savedInst.id,
+                  librarian_id: libId,
+                  attended: false,
+                  confirmed_by: "system",
+                  confirmed_at: new Date().toISOString(),
+                  forgiven: false,
+                  punishment_issued: false,
+                };
+                const savedAtt = await saveEntity("attendance", att);
+                appData.attendance.push(savedAtt);
+                recalcAttendancePct(libId);
+              }
+            }
+          }
+        }
+      }
       await syncDutyInstancesForSector(s.id);
     }
 
@@ -4988,10 +5032,11 @@ function viewTagHistoryForLibrarian(libId) {
 
 function toggleMultiSelect() {
   const checked = document.getElementById("autoAssignMulti").checked;
-  document.getElementById("multiSelectContainer").style.display = checked
-    ? "block"
-    : "none";
-  if (checked) populateMultiSelect();
+  const container = document.getElementById("multiSelectContainer");
+  container.style.display = checked ? "block" : "none";
+  if (checked) {
+    populateMultiSelect();   // always populate when shown
+  }
 }
 
 function populateMultiSelect() {
