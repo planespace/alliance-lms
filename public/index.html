@@ -292,36 +292,27 @@
                     <option value="attendance">Attendance</option>
                   </select>
                 </div>
-                <div>
-                  <button
-                    class="btn btn-primary btn-sm"
-                    onclick="openModal('librarianModal')"
-                  >
-                    + Add
-                  </button>
-                  <button
-                    class="btn btn-success btn-sm"
-                    onclick="openModal('bulkModal')"
-                  >
-                    📥 Bulk Add
-                  </button>
+                               <div>
+                  <button class="btn btn-primary btn-sm" onclick="openModal('librarianModal')">+ Add</button>
+                  <button class="btn btn-success btn-sm" onclick="openModal('bulkModal')">📥 Bulk Add</button>
+                  <button class="btn btn-warning btn-sm" onclick="openBulkEditModal()">✏️ Bulk Edit</button>
                 </div>
               </div>
               <div class="table-scroll">
                 <table>
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Grade</th>
-                      <th>Adm No.</th>
-                      <th>House</th>
-                      <!-- ✅ added -->
-                      <th>Sectors</th>
-                      <th>Tags</th>
-                      <th>Attendance</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
+                       <thead>
+        <tr>
+          <th><input type="checkbox" id="selectAllLibrarians" onchange="toggleSelectAllLibrarians(this)" title="Select all"></th>
+          <th>Name</th>
+          <th>Grade</th>
+          <th>Adm No.</th>
+          <th>House</th>
+          <th>Sectors</th>
+          <th>Tags</th>
+          <th>Attendance</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
                   <tbody id="dashboardTableBody">
                     <!-- Rows rendered by JavaScript -->
                   </tbody>
@@ -1900,7 +1891,34 @@
     
     </div>
 
-
+    <!-- Bulk Edit Modal (Fullscreen) -->
+    <div class="modal-overlay" id="bulkEditModal">
+      <div class="modal fullscreen">
+        <div class="modal-header">
+          <h3>✏️ Bulk Edit Junior Librarians</h3>
+          <button class="close-btn" onclick="closeModal('bulkEditModal')">×</button>
+        </div>
+        <div class="modal-body" style="overflow-x: auto;">
+          <table style="width:100%; min-width:800px; font-size:14px;">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Grade</th>
+                <th>Adm No.</th>
+                <th>House</th>
+              </tr>
+            </thead>
+            <tbody id="bulkEditTableBody">
+              <!-- Rows filled by JavaScript -->
+            </tbody>
+          </table>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('bulkEditModal')">Cancel</button>
+          <button class="btn btn-primary" onclick="saveBulkEdit()">💾 Save All Changes</button>
+        </div>
+      </div>
+    </div>
 
 
 

@@ -1066,6 +1066,109 @@ async function addLibrarianToSector(libId) {
   }
 }
 
+// ============================================
+// BULK EDIT LIBRARIANS (FULL-SCREEN TABLE)
+// ============================================
+
+function openBulkEditModal() {
+  const librarians = appData.librarians.filter(l => !l.is_deleted);
+  if (librarians.length === 0) {
+    toast("No librarians to edit.");
+    return;
+  }
+
+  // Build table rows with prefilled inputs
+  let html = '';
+  librarians.forEach(l => {
+    html += `
+      <tr data-lib-id="${l.id}">
+        <td><input type="text" class="bulk-edit-name" value="${escapeHtml(l.name)}" style="width:100%; padding:6px; border:1px solid var(--border); border-radius:4px;"></td>
+        <td><input type="text" class="bulk-edit-grade" value="${escapeHtml(l.grade)}" style="width:100%; padding:6px; border:1px solid var(--border); border-radius:4px;"></td>
+        <td><input type="text" class="bulk-edit-adm" value="${escapeHtml(l.adm_no)}" style="width:100%; padding:6px; border:1px solid var(--border); border-radius:4px;"></td>
+        <td><input type="text" class="bulk-edit-house" value="${escapeHtml(l.house || '')}" style="width:100%; padding:6px; border:1px solid var(--border); border-radius:4px;"></td>
+      </tr>
+    `;
+  });
+
+  document.getElementById('bulkEditTableBody').innerHTML = html;
+  openModal('bulkEditModal');
+}
+
+async function saveBulkEdit() {
+  const rows = document.querySelectorAll('#bulkEditTableBody tr');
+  let savedCount = 0;
+  let errors = [];
+
+  showLoading();
+
+  for (const row of rows) {
+    const libId = row.getAttribute('data-lib-id');
+    const lib = getLib(libId);
+    if (!lib) continue;
+
+    const nameInput = row.querySelector('.bulk-edit-name');
+    const gradeInput = row.querySelector('.bulk-edit-grade');
+    const admInput = row.querySelector('.bulk-edit-adm');
+    const houseInput = row.querySelector('.bulk-edit-house');
+
+    const newName = nameInput.value.trim();
+    const newGrade = gradeInput.value.trim();
+    const newAdm = admInput.value.trim();
+    const newHouse = houseInput.value.trim();
+
+    // Skip if nothing changed
+    if (newName === lib.name && newGrade === lib.grade && newAdm === lib.adm_no && newHouse === (lib.house || '')) {
+      continue;
+    }
+
+    // Basic validation
+    if (!newName || !newGrade || !newAdm) {
+      errors.push(`${lib.name}: all fields except House are required.`);
+      continue;
+    }
+
+    // Check duplicate adm_no (against other active librarians, excluding self)
+    if (newAdm !== lib.adm_no && appData.librarians.some(l => l.adm_no === newAdm && l.id !== libId && !l.is_deleted)) {
+      errors.push(`${lib.name}: admission number "${newAdm}" already exists.`);
+      continue;
+    }
+
+    // Update local object
+    lib.name = newName;
+    lib.grade = newGrade;
+    lib.adm_no = newAdm;
+    lib.house = newHouse;
+
+    try {
+      await saveEntity('librarians', lib, libId);
+      savedCount++;
+    } catch (err) {
+      errors.push(`${lib.name}: server save failed.`);
+    }
+  }
+
+  hideLoading();
+
+  if (errors.length > 0) {
+    toast(`⚠️ ${savedCount} saved. Errors: ${errors.join(', ')}`);
+  } else {
+    toast(`✅ ${savedCount} librarians updated.`);
+  }
+
+  closeModal('bulkEditModal');
+  renderCurrentPage();
+}
+
+function escapeHtml(unsafe) {
+  if (!unsafe) return "";
+  return String(unsafe)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 function showActionPopup(librarianId) {
   const lib = getLib(librarianId);
   if (!lib) return;
@@ -1198,7 +1301,8 @@ function renderDashboardTable() {
         ? "text-warning"
         : "text-success";
     const isRep = tags.some((t) => t.type === "rep");
-    html += `<tr>
+html += `<tr>
+      <td><input type="checkbox" class="librarian-checkbox" value="${l.id}" onchange="updateBulkEditButton()"></td>
       <td class="${isRep ? "rep-name" : ""}">${l.name}</td>
       <td>${l.grade}</td>
       <td>${l.adm_no}</td>
