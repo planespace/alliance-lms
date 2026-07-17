@@ -1301,8 +1301,7 @@ function renderDashboardTable() {
         ? "text-warning"
         : "text-success";
     const isRep = tags.some((t) => t.type === "rep");
-html += `<tr>
-      <td><input type="checkbox" class="librarian-checkbox" value="${l.id}" onchange="updateBulkEditButton()"></td>
+    html += `<tr>
       <td class="${isRep ? "rep-name" : ""}">${l.name}</td>
       <td>${l.grade}</td>
       <td>${l.adm_no}</td>
@@ -1317,7 +1316,6 @@ html += `<tr>
   });
   tbody.innerHTML = html;
 }
-
 // ============================================
 // ADD LIBRARIAN (single & bulk) + HOUSE
 // ============================================
@@ -4247,21 +4245,31 @@ async function deleteAllArchive() {
     async () => {
       showLoading();
       try {
+        const headers = {};
+        if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+
         for (const l of archived) {
+          // 1. Remove all sector assignments
           const assignments = appData.sector_assignments.filter(
             (a) => a.librarian_id === l.id
           );
           for (const a of assignments) {
-            const headers = {};
-            if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
             await fetch(
               `${API_BASE}/sectors/assignments/${a.sector_id}/${a.librarian_id}`,
               { method: "DELETE", headers }
             );
           }
-          await deleteEntity("librarians", l.id);
+          // 2. Permanent delete of the librarian
+          await fetch(`${API_BASE}/librarians/${l.id}/permanent`, {
+            method: "DELETE",
+            headers,
+          });
         }
-        appData.librarians = appData.librarians.filter((l) => !l.is_deleted);
+
+        // Remove from local arrays
+        appData.librarians = appData.librarians.filter(
+          (l) => !archived.some((a) => a.id === l.id)
+        );
         appData.sector_assignments = appData.sector_assignments.filter(
           (a) => !archived.some((l) => l.id === a.librarian_id)
         );
@@ -4277,6 +4285,7 @@ async function deleteAllArchive() {
         appData.notifications = appData.notifications.filter(
           (n) => !archived.some((l) => l.id === n.librarian_id)
         );
+
         renderCurrentPage();
         toast("All archived permanently deleted.");
       } catch (err) {
@@ -5239,28 +5248,60 @@ async function deleteSector(id, options = {}) {
       appData.sector_assignments = appData.sector_assignments.filter(
         (a) => a.sector_id !== id
       );
+
       const duties = appData.duties.filter((d) => d.sector_id === id);
+      const today = getToday();
+
       for (const duty of duties) {
-        const instances = appData.duty_instances.filter(
-          (di) => di.duty_id === duty.id
-        );
         if (clearHistory) {
-          for (const inst of instances) {
-            await deleteEntity("attendance/by-instance", inst.id);
-          }
-          appData.attendance = appData.attendance.filter(
-            (a) => !instances.some((inst) => inst.id === a.duty_instance_id)
+          // Completely remove the duty and all instances/attendance
+          const allInstances = appData.duty_instances.filter(
+            (di) => di.duty_id === duty.id
           );
+          for (const inst of allInstances) {
+            await deleteEntity("attendance/by-instance", inst.id);
+            appData.attendance = appData.attendance.filter(
+              (a) => a.duty_instance_id !== inst.id
+            );
+          }
+          for (const inst of allInstances) {
+            await deleteEntity("duties/instances", inst.id);
+          }
+          appData.duty_instances = appData.duty_instances.filter(
+            (di) => di.duty_id !== duty.id
+          );
+          await deleteEntity("duties", duty.id);
+          appData.duties = appData.duties.filter((d) => d.id !== duty.id);
+        } else {
+          // Stop future occurrences (like deleteDuty without clearHistory)
+          const d = new Date(today);
+          d.setDate(d.getDate() - 1);
+          const yesterday = d.toISOString().split("T")[0];
+          duty.end_date = yesterday;
+          await saveEntity("duties", duty, duty.id);
+
+          // Delete only future instances and their attendance
+          const futureInsts = appData.duty_instances.filter(
+            (di) => di.duty_id === duty.id && di.date >= today
+          );
+          for (const inst of futureInsts) {
+            await deleteEntity("attendance/by-instance", inst.id);
+            appData.attendance = appData.attendance.filter(
+              (a) => a.duty_instance_id !== inst.id
+            );
+            await deleteEntity("duties/instances", inst.id);
+          }
+          appData.duty_instances = appData.duty_instances.filter(
+            (di) => !(di.duty_id === duty.id && di.date >= today)
+          );
+          // Keep the duty in appData.duties (with updated end_date)
         }
-        for (const inst of instances) {
-          await deleteEntity("duties/instances", inst.id);
-        }
-        appData.duty_instances = appData.duty_instances.filter(
-          (di) => di.duty_id !== duty.id
-        );
-        await deleteEntity("duties", duty.id);
-        appData.duties = appData.duties.filter((d) => d.id !== duty.id);
       }
+
+      // Recalculate percentages for all affected librarians
+      const affectedPeople = getSectorPeople(id);
+      affectedPeople.forEach(p => recalcAttendancePct(p.id));
+
       await deleteEntity("sectors", id);
       appData.sectors = appData.sectors.filter((s) => s.id !== id);
       selectedLeafId = null;
@@ -5297,28 +5338,55 @@ async function deleteSector(id, options = {}) {
           appData.sector_assignments = appData.sector_assignments.filter(
             (a) => a.sector_id !== id
           );
+
           const duties = appData.duties.filter((d) => d.sector_id === id);
+          const today = getToday();
+
           for (const duty of duties) {
-            const instances = appData.duty_instances.filter(
-              (di) => di.duty_id === duty.id
-            );
             if (clearHistory) {
-              for (const inst of instances) {
+              const allInstances = appData.duty_instances.filter(
+                (di) => di.duty_id === duty.id
+              );
+              for (const inst of allInstances) {
                 await deleteEntity("attendance/by-instance", inst.id);
+                appData.attendance = appData.attendance.filter(
+                  (a) => a.duty_instance_id !== inst.id
+                );
               }
-              appData.attendance = appData.attendance.filter(
-                (a) => !instances.some((inst) => inst.id === a.duty_instance_id)
+              for (const inst of allInstances) {
+                await deleteEntity("duties/instances", inst.id);
+              }
+              appData.duty_instances = appData.duty_instances.filter(
+                (di) => di.duty_id !== duty.id
+              );
+              await deleteEntity("duties", duty.id);
+              appData.duties = appData.duties.filter((d) => d.id !== duty.id);
+            } else {
+              const d = new Date(today);
+              d.setDate(d.getDate() - 1);
+              const yesterday = d.toISOString().split("T")[0];
+              duty.end_date = yesterday;
+              await saveEntity("duties", duty, duty.id);
+
+              const futureInsts = appData.duty_instances.filter(
+                (di) => di.duty_id === duty.id && di.date >= today
+              );
+              for (const inst of futureInsts) {
+                await deleteEntity("attendance/by-instance", inst.id);
+                appData.attendance = appData.attendance.filter(
+                  (a) => a.duty_instance_id !== inst.id
+                );
+                await deleteEntity("duties/instances", inst.id);
+              }
+              appData.duty_instances = appData.duty_instances.filter(
+                (di) => !(di.duty_id === duty.id && di.date >= today)
               );
             }
-            for (const inst of instances) {
-              await deleteEntity("duties/instances", inst.id);
-            }
-            appData.duty_instances = appData.duty_instances.filter(
-              (di) => di.duty_id !== duty.id
-            );
-            await deleteEntity("duties", duty.id);
-            appData.duties = appData.duties.filter((d) => d.id !== duty.id);
           }
+
+          const affectedPeople = getSectorPeople(id);
+          affectedPeople.forEach(p => recalcAttendancePct(p.id));
+
           await deleteEntity("sectors", id);
           appData.sectors = appData.sectors.filter((s) => s.id !== id);
           selectedLeafId = null;
@@ -5334,9 +5402,9 @@ async function deleteSector(id, options = {}) {
       }
     );
 
-    // -------------------------------------------------------------
-    // Category deletion – one popup for all children
-    // -------------------------------------------------------------
+  // -------------------------------------------------------------
+  // Category deletion – one popup for all children
+  // -------------------------------------------------------------
   } else {
     showConfirm(
       "Delete Category",
@@ -5371,7 +5439,6 @@ async function deleteSector(id, options = {}) {
     );
   }
 }
-
 async function removeFromSector(sectorId, libId) {
   if (removingInProgress) return;
   removingInProgress = true;
