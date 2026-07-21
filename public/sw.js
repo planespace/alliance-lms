@@ -33,13 +33,30 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
-  // Only cache static assets – never API responses (they are user‑specific)
+  // For JavaScript and CSS files, try network first, fall back to cache
+  if (event.request.url.endsWith(".js") || event.request.url.endsWith(".css")) {
+    event.respondWith(
+      fetch(event.request)
+        .then((networkResponse) => {
+          // Optionally update the cache with the fresh file
+          const responseClone = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseClone);
+          });
+          return networkResponse;
+        })
+        .catch(() => {
+          // If network fails (offline), serve the cached version
+          return caches.match(event.request);
+        })
+    );
+    return;
+  }
+
+  // For all other static assets, serve from cache first
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        return cachedResponse;
-      }
-      return fetch(event.request);
+      return cachedResponse || fetch(event.request);
     })
   );
 });
