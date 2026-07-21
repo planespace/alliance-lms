@@ -5585,8 +5585,10 @@ async function removeFromSector(sectorId, libId) {
     cancelButtonText: "Cancel",
     reverseButtons: true,
     preConfirm: () => {
+      // Get the checkbox from the Swal popup itself (always works)
+      const checkbox = Swal.getPopup().querySelector("#removeHistoryCheck");
       return {
-        clearHistory: document.getElementById("removeHistoryCheck").checked,
+        clearHistory: checkbox ? checkbox.checked : false,
       };
     },
   }).then(async (result) => {
@@ -5635,23 +5637,23 @@ async function removeFromSector(sectorId, libId) {
           appData.attendance = appData.attendance.filter(
             (a) => !futureAtt.some((fa) => fa.id === a.id)
           );
-          recalcAttendancePct(libId);   // ★ added
+          recalcAttendancePct(libId);
         } else {
-          // Delete all attendance for this librarian in this sector
+          // Delete ALL attendance for this librarian in this sector
           for (const att of attToDelete) {
             await deleteEntity("attendance", att.id);
           }
           appData.attendance = appData.attendance.filter(
             (a) => !attToDelete.some((fa) => fa.id === a.id)
           );
-          recalcAttendancePct(libId);   // ★ added
+          recalcAttendancePct(libId);
         }
       }
 
       // 3. Sync remaining (adds missing people, no removal)
       await syncDutyInstancesForSector(sectorId);
 
-      // 4. Refresh UI – sectors page and Manage Sectors modal if open
+      // 4. Refresh UI
       renderCurrentPage();
 
       const mgmtModal = document.getElementById("sectorManagementModal");
