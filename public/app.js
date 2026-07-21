@@ -2247,11 +2247,7 @@ async function saveQuickLeaf() {
       return;
     }
     if (!dutyName || !start || !end) {
-      Swal.fire(
-        "Error",
-        "Duty name, start, and end time are required.",
-        "error"
-      );
+      Swal.fire("Error", "Duty name, start, and end time are required.", "error");
       return;
     }
     if (start >= end) {
@@ -2303,13 +2299,13 @@ async function saveQuickLeaf() {
       recurrence_interval: interval,
       end_date: endDate || null,
       is_punishment: isPunishment,
-      sector_id: tempSectorId, // link to temp sector
+      sector_id: tempSectorId,
       created_by: appData.current_user,
       created_at: new Date().toISOString(),
       _temp: true,
     };
 
-    // 3. Push into local cache & close modal immediately
+    // 3. Push only temporary objects, then close modal immediately
     appData.sectors.push(tempSector);
     appData.duties.push(tempDuty);
 
@@ -2345,18 +2341,19 @@ async function saveQuickLeaf() {
       recurrence_interval: interval,
       end_date: endDate || null,
       is_punishment: isPunishment,
-      sector_id: savedSector._id, // ← real sector ID
+      sector_id: savedSector._id,
       created_by: appData.current_user,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
     const savedDuty = await saveEntity("duties", newDuty);
 
-    // Replace temp duty with real one
+    // ★ Replace temporary duty with the real one, NOT push an extra
     const dutyIdx = appData.duties.findIndex((d) => d.id === tempDutyId);
     if (dutyIdx !== -1) {
       appData.duties[dutyIdx] = { ...savedDuty, id: savedDuty._id };
     } else {
+      // Fallback: if the temp was somehow removed, push it (safeguard)
       appData.duties.push({ ...savedDuty, id: savedDuty._id });
     }
 
@@ -2393,7 +2390,7 @@ async function saveQuickLeaf() {
     renderCurrentPage();
     toast(`Leaf sector "${name}" added.`);
   } catch (err) {
-    // Remove temporary objects if they still exist
+    // Remove temporary objects on failure
     appData.sectors = appData.sectors.filter((s) => s._temp !== true);
     appData.duties = appData.duties.filter((d) => d._temp !== true);
     renderCurrentPage();
