@@ -1209,6 +1209,7 @@ function renderDashboard() {
       Math.round((att / allAttendance.length) * 100) + "%";
   } else statAttendance.textContent = "N/A";
   document.getElementById("dutyBadge").textContent = todayDuties.length;
+  populateTagFilterDropdown();
   renderDashboardTable();
 }
 
@@ -1246,6 +1247,18 @@ function renderDashboardTable() {
         return l.adm_no.toLowerCase().includes(searchTerm);
       return true;
     });
+  }
+
+    // Tag filter
+  const tagFilterValue = document.getElementById("tagFilterDropdown")?.value || "";
+  if (tagFilterValue) {
+    if (tagFilterValue.startsWith("type:")) {
+      const type = tagFilterValue.substring(5);
+      librarians = librarians.filter(l => getLibTags(l.id).some(t => t.type === type));
+    } else if (tagFilterValue.startsWith("name:")) {
+      const name = tagFilterValue.substring(5);
+      librarians = librarians.filter(l => getLibTags(l.id).some(t => t.name === name));
+    }
   }
 
   if (sortBy === "newest")
@@ -1316,6 +1329,100 @@ function renderDashboardTable() {
   });
   tbody.innerHTML = html;
 }
+
+// ============================================
+// TAG FILTER ON DASHBOARD
+// ============================================
+
+function populateTagFilterDropdown() {
+  const dropdown = document.getElementById("tagFilterDropdown");
+  if (!dropdown) return;
+
+  // Get all unique active tag types
+  const types = [...new Set(appData.tags.filter(t => t.is_active).map(t => t.type))];
+  // Get all unique active tag names
+  const names = [...new Set(appData.tags.filter(t => t.is_active).map(t => t.name))];
+
+  let options = '<option value="">🏷️ All Tags</option>';
+  if (types.length > 0) {
+    options += '<optgroup label="By Type">';
+    types.forEach(type => {
+      options += `<option value="type:${type}">${type.charAt(0).toUpperCase() + type.slice(1)}</option>`;
+    });
+    options += '</optgroup>';
+  }
+  if (names.length > 0) {
+    options += '<optgroup label="By Tag Name">';
+    names.forEach(name => {
+      options += `<option value="name:${name}">${name}</option>`;
+    });
+    options += '</optgroup>';
+  }
+  options += '<option value="__expired__">🕒 View Past / Expired Tags</option>';
+
+  dropdown.innerHTML = options;
+}
+
+function filterByTag() {
+  const value = document.getElementById("tagFilterDropdown").value;
+  if (value === "__expired__") {
+    openExpiredTagsModal();
+    // reset dropdown to "All Tags"
+    document.getElementById("tagFilterDropdown").value = "";
+    renderDashboardTable(); // show all
+    return;
+  }
+  // Re-render the dashboard table with the filter applied
+  renderDashboardTable();
+}
+
+function openExpiredTagsModal() {
+  const history = appData.tag_history || [];
+  let html = '';
+  if (history.length === 0) {
+    html = '<p class="text-muted">No expired or deleted tags found.</p>';
+  } else {
+    html += '<table style="width:100%; font-size:13px;"><thead><tr><th>Tag Name</th><th>Type</th><th>Librarian</th><th>Start</th><th>End</th><th>Removed</th><th>Reason</th></tr></thead><tbody>';
+    history.forEach(h => {
+      const lib = getLib(h.librarian_id);
+      html += `<tr>
+        <td><strong>${h.tag_name}</strong></td>
+        <td>${h.type}</td>
+        <td>${lib ? lib.name : "Unknown"}</td>
+        <td>${formatDate(h.start_date)}</td>
+        <td>${h.end_date ? formatDate(h.end_date) : "Forever"}</td>
+        <td>${formatDate(h.removed_at)}</td>
+        <td>${h.removal_reason || "—"}</td>
+      </tr>`;
+    });
+    html += '</tbody></table>';
+  }
+  document.getElementById("expiredTagsContent").innerHTML = html;
+  openModal("expiredTagsModal");
+}
+
+async function clearAllExpiredTags() {
+  showConfirm(
+    "Clear All Expired Tags",
+    "Permanently delete all expired tag history? This cannot be undone.",
+    async () => {
+      try {
+        const ids = appData.tag_history.map(h => h.id);
+        for (const id of ids) {
+          await deleteEntity("tags/history", id);
+        }
+        appData.tag_history = [];
+        saveData();
+        closeModal("expiredTagsModal");
+        toast("All expired tags cleared.");
+      } catch (err) {
+        console.error(err);
+        toast("Failed to clear expired tags.");
+      }
+    }
+  );
+}
+
 // ============================================
 // ADD LIBRARIAN (single & bulk) + HOUSE
 // ============================================
@@ -6320,26 +6427,27 @@ async function generateDutyInstancesForDate(date) {
 
       let libIds = [];
       
-      // ★ Use the MOST RECENT instance (by date) as the template,
-      // ★ not the first one found. This ensures that edits to
-      // ★ today's librarians are correctly propagated to future dates.
-      const allOtherInstances = appData.duty_instances.filter(
-        (di) => di.duty_id === duty.id && di.id !== savedInst.id
-      );
-      let templateInst = null;
-      if (allOtherInstances.length > 0) {
-        templateInst = allOtherInstances.reduce((latest, inst) => {
-          return inst.date > latest.date ? inst : latest;
-        }, allOtherInstances[0]);
-      }
-
-      if (templateInst) {
-        const templateRecords = appData.attendance.filter(
-          (a) => a.duty_instance_id === templateInst.id
-        );
-        libIds = templateRecords.map((r) => r.librarian_id);
-      } else if (duty.sector_id) {
+      if (duty.sector_id) {
+        // Sector‑linked duties always use the current sector members
         libIds = getSectorPeople(duty.sector_id).map((p) => p.id);
+      } else {
+        // Standalone duties: use the most recent instance as a template
+        const allOtherInstances = appData.duty_instances.filter(
+          (di) => di.duty_id === duty.id && di.id !== savedInst.id
+        );
+        let templateInst = null;
+        if (allOtherInstances.length > 0) {
+          templateInst = allOtherInstances.reduce((latest, inst) => {
+            return inst.date > latest.date ? inst : latest;
+          }, allOtherInstances[0]);
+        }
+
+        if (templateInst) {
+          const templateRecords = appData.attendance.filter(
+            (a) => a.duty_instance_id === templateInst.id
+          );
+          libIds = templateRecords.map((r) => r.librarian_id);
+        }
       }
       
       for (const libId of libIds) {

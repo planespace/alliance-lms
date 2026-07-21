@@ -296,6 +296,9 @@
                   <button class="btn btn-primary btn-sm" onclick="openModal('librarianModal')">+ Add</button>
                   <button class="btn btn-success btn-sm" onclick="openModal('bulkModal')">📥 Bulk Add</button>
                   <button class="btn btn-warning btn-sm" onclick="openBulkEditModal()">✏️ Bulk Edit</button>
+                                    <select id="tagFilterDropdown" onchange="filterByTag()" style="margin-left:8px; padding:6px 12px; border:1px solid var(--border); border-radius:var(--radius-sm); font-size:13px;">
+                    <option value="">🏷️ All Tags</option>
+                  </select>
                 </div>
               </div>
               <div class="table-scroll">
@@ -1921,6 +1924,22 @@
     </div>
 
 
+        <!-- Expired Tags Modal -->
+    <div class="modal-overlay" id="expiredTagsModal">
+      <div class="modal">
+        <div class="modal-header">
+          <h3>🕒 Past / Expired Tags</h3>
+          <button class="close-btn" onclick="closeModal('expiredTagsModal')">×</button>
+        </div>
+        <div class="modal-body">
+          <div id="expiredTagsContent" style="max-height:60vh; overflow-y:auto;"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('expiredTagsModal')">Close</button>
+          <button class="btn btn-danger" onclick="clearAllExpiredTags()">🗑 Delete All</button>
+        </div>
+      </div>
+    </div>
 
     <script src="app.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
