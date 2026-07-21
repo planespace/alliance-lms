@@ -1060,7 +1060,7 @@ async function addLibrarianToSector(libId) {
 
     await syncDutyInstancesForSector(secId);
 
-    // If the attendance page is open, refresh it
+    // If the attendance page is open, refresh it so the new librarian appears instantly
     if (currentPage === "attendance") {
       renderAttendance();
     }
@@ -1070,7 +1070,6 @@ async function addLibrarianToSector(libId) {
     toast("Added.");
   }
 }
-
 // ============================================
 // BULK EDIT LIBRARIANS (FULL-SCREEN TABLE)
 // ============================================
@@ -5779,6 +5778,7 @@ function openAddPeopleModal(secId) {
   const assignedIds = appData.sector_assignments
     .filter((a) => a.sector_id === secId)
     .map((a) => a.librarian_id);
+
   let html = `<h4>Add People to ${sector.name}</h4><div style="max-height:300px;overflow-y:auto;">`;
   allLibs.forEach((l) => {
     const checked = assignedIds.includes(l.id);
@@ -5789,9 +5789,19 @@ function openAddPeopleModal(secId) {
     }> ${l.name} (${l.adm_no})</label>`;
   });
   html += `</div><button class="btn btn-primary btn-sm" onclick="saveAddPeople('${secId}')">Save</button>`;
+
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay active";
-  overlay.innerHTML = `<div class="modal"><div class="modal-header"><h3>Add People</h3><button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button></div><div class="modal-body">${html}</div></div>`;
+  overlay.id = "addPeopleModal";
+  overlay.style.zIndex = modalZIndex + 10;
+  overlay.innerHTML = `
+    <div class="modal" style="z-index:${modalZIndex + 11};">
+      <div class="modal-header">
+        <h3>Add People</h3>
+        <button class="close-btn" onclick="closeModal('addPeopleModal')">×</button>
+      </div>
+      <div class="modal-body">${html}</div>
+    </div>`;
   document.body.appendChild(overlay);
 }
 
@@ -5833,12 +5843,20 @@ async function saveAddPeople(secId) {
       );
     }
 
+    // Sync today and future duty instances (adds missing people)
     await syncDutyInstancesForSector(secId);
 
-    document
-      .querySelectorAll(".modal-overlay.active")
-      .forEach((m) => m.remove());
+    // Properly close the modal (no DOM removal)
+    closeModal("addPeopleModal");
+
+    // Refresh the sector page immediately
     renderSectors();
+
+    // If the attendance page is currently visible, refresh it so new people appear in today's duties
+    if (currentPage === "attendance") {
+      renderAttendance();
+    }
+
     toast("People updated.");
   } catch (err) {
     console.error(err);
