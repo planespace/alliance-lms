@@ -1059,9 +1059,12 @@ async function addLibrarianToSector(libId) {
     const saved = await saveEntity("sectors/assignments", newAssignment);
     appData.sector_assignments.push(saved);
 
+    // ★ Ensure today’s instances exist
+    await generateDutyInstancesForDate(getToday());
+
     await syncDutyInstancesForSector(secId);
 
-    // If the attendance page is open, refresh it so the new librarian appears instantly
+    // If the attendance page is open, refresh it
     if (currentPage === "attendance") {
       renderAttendance();
     }
@@ -5843,6 +5846,9 @@ async function saveAddPeople(secId) {
         (a) => !(a.sector_id === secId && a.librarian_id === libId)
       );
     }
+
+    // ★ Make sure today’s instances exist for the duties in this sector
+    await generateDutyInstancesForDate(getToday());
 
     // Sync today and future duty instances (adds missing people)
     await syncDutyInstancesForSector(secId);
