@@ -910,6 +910,7 @@ function closeModal(id) {
   // ★ Clear management ID
   if (id === "sectorManagementModal") {
     currentManagementLibId = null;
+    renderCurrentPage();
   }
 }
 document.querySelectorAll(".modal-overlay").forEach((el) => {
