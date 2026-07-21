@@ -892,10 +892,13 @@ function closeModal(id) {
   const modal = document.getElementById(id);
   if (modal) modal.classList.remove("active");
 
-  // If we just closed the attendance history modal, refresh
-  // the current page so the dashboard table shows the latest
-  // attendance percentages.
+  // Refresh after closing attendance‑history modal
   if (id === "attendanceHistoryModal") {
+    renderCurrentPage();
+  }
+
+  // Refresh after closing sector‑management modals (Manage Sectors AND Add People)
+  if (id === "sectorManagementModal" || id === "addPeopleModal") {
     renderCurrentPage();
   }
 
@@ -907,10 +910,10 @@ function closeModal(id) {
     if (footer && sectorModalOriginalFooter)
       footer.innerHTML = sectorModalOriginalFooter;
   }
+
   // ★ Clear management ID
   if (id === "sectorManagementModal") {
     currentManagementLibId = null;
-    renderCurrentPage();
   }
 }
 document.querySelectorAll(".modal-overlay").forEach((el) => {
