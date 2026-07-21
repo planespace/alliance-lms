@@ -1060,6 +1060,11 @@ async function addLibrarianToSector(libId) {
 
     await syncDutyInstancesForSector(secId);
 
+    // If the attendance page is open, refresh it
+    if (currentPage === "attendance") {
+      renderAttendance();
+    }
+
     viewSectorManagement(libId);
     renderSectors();
     toast("Added.");
