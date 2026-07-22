@@ -1,5 +1,5 @@
 // public/sw.js
-const CACHE_NAME = "alliance-lms-v3";
+const CACHE_NAME = "alliance-lms-v4";
 
 // Assets to cache immediately on install
 const PRECACHE_URLS = [
