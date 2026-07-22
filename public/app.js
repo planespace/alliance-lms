@@ -1062,16 +1062,56 @@ async function addLibrarianToSector(libId) {
     const saved = await saveEntity("sectors/assignments", newAssignment);
     appData.sector_assignments.push(saved);
 
-    // ★ Ensure today’s instances exist
+    // ★ Force today’s duty instance to exist (creates it if needed)
     await generateDutyInstancesForDate(getToday());
 
+    // ★ Manually ensure the new librarian is added to today’s instance
+    const today = getToday();
+    const duties = appData.duties.filter(d => d.sector_id === secId);
+    for (const duty of duties) {
+      if (dutyOccursOnDate(duty, today)) {
+        // Find (or create) today's instance
+        let inst = appData.duty_instances.find(
+          di => di.duty_id === duty.id && di.date === today
+        );
+        if (!inst) {
+          // Create the instance on the fly (rare, generateDutyInstancesForDate should have done it)
+          const newInst = {
+            duty_id: duty.id,
+            date: today,
+            is_active: true,
+            created_at: new Date().toISOString(),
+          };
+          const savedInst = await saveEntity("duties/instances", newInst);
+          appData.duty_instances.push(savedInst);
+          inst = savedInst;
+        }
+
+        // Add attendance record for this librarian if it doesn't already exist
+        if (!appData.attendance.some(a => a.duty_instance_id === inst.id && a.librarian_id === libId)) {
+          const att = {
+            duty_instance_id: inst.id,
+            librarian_id: libId,
+            attended: false,
+            confirmed_by: "system",
+            confirmed_at: new Date().toISOString(),
+            forgiven: false,
+            punishment_issued: false,
+          };
+          const savedAtt = await saveEntity("attendance", att);
+          appData.attendance.push(savedAtt);
+          recalcAttendancePct(libId);
+        }
+      }
+    }
+
+    // Sync future instances as usual
     await syncDutyInstancesForSector(secId);
 
-    // If the attendance page is open, refresh it
+    // Refresh UI
     if (currentPage === "attendance") {
       renderAttendance();
     }
-
     viewSectorManagement(libId);
     renderSectors();
     toast("Added.");
@@ -5849,23 +5889,52 @@ async function saveAddPeople(secId) {
       );
     }
 
-    // ★ Make sure today’s instances exist for the duties in this sector
+    // ★ Force today’s instance and manually add each new librarian
     await generateDutyInstancesForDate(getToday());
+    const today = getToday();
+    const duties = appData.duties.filter(d => d.sector_id === secId);
+    for (const libId of toAdd) {
+      for (const duty of duties) {
+        if (dutyOccursOnDate(duty, today)) {
+          let inst = appData.duty_instances.find(
+            di => di.duty_id === duty.id && di.date === today
+          );
+          if (!inst) {
+            const newInst = {
+              duty_id: duty.id,
+              date: today,
+              is_active: true,
+              created_at: new Date().toISOString(),
+            };
+            const savedInst = await saveEntity("duties/instances", newInst);
+            appData.duty_instances.push(savedInst);
+            inst = savedInst;
+          }
+          if (!appData.attendance.some(a => a.duty_instance_id === inst.id && a.librarian_id === libId)) {
+            const att = {
+              duty_instance_id: inst.id,
+              librarian_id: libId,
+              attended: false,
+              confirmed_by: "system",
+              confirmed_at: new Date().toISOString(),
+              forgiven: false,
+              punishment_issued: false,
+            };
+            const savedAtt = await saveEntity("attendance", att);
+            appData.attendance.push(savedAtt);
+            recalcAttendancePct(libId);
+          }
+        }
+      }
+    }
 
-    // Sync today and future duty instances (adds missing people)
     await syncDutyInstancesForSector(secId);
 
-    // Properly close the modal (no DOM removal)
     closeModal("addPeopleModal");
-
-    // Refresh the sector page immediately
     renderSectors();
-
-    // If the attendance page is currently visible, refresh it so new people appear in today's duties
     if (currentPage === "attendance") {
       renderAttendance();
     }
-
     toast("People updated.");
   } catch (err) {
     console.error(err);
