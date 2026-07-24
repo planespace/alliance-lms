@@ -43,6 +43,7 @@ let currentPage = "dashboard";
 let selectedLibrarianId = null;
 let selectedTagId = null;
 let saveQuickLeafInProgress = false;
+let creatingDuty = false;
 let searchTimer;
 let confirmCallback = null;
 let showDismissed = false;
@@ -6549,6 +6550,9 @@ function selectAllDutyLibrarians(sel) {
 }
 
 async function createDuty() {
+  if (creatingDuty) return;          // ★ block double clicks
+  creatingDuty = true;
+
   const name = document.getElementById("dutyName").value.trim();
   const start = document.getElementById("dutyStart").value;
   const end = document.getElementById("dutyEnd").value;
@@ -6569,10 +6573,12 @@ async function createDuty() {
 
   if (!name || !start || !end || days.length === 0) {
     Swal.fire("Error", "Fill all fields and select days.", "error");
+    creatingDuty = false;
     return;
   }
   if (start >= end) {
     Swal.fire("Error", "End must be after start.", "error");
+    creatingDuty = false;
     return;
   }
 
@@ -6585,6 +6591,7 @@ async function createDuty() {
         "The leaf sector has no librarians assigned.",
         "error"
       );
+      creatingDuty = false;
       return;
     }
   } else {
@@ -6593,6 +6600,7 @@ async function createDuty() {
       .forEach((cb) => libs.push(cb.value));
     if (libs.length === 0) {
       Swal.fire("Error", "Select at least one librarian.", "error");
+      creatingDuty = false;
       return;
     }
   }
@@ -6679,7 +6687,7 @@ async function createDuty() {
         };
         const savedAtt = await saveEntity("attendance", att);
         appData.attendance.push(savedAtt);
-        recalcAttendancePct(libId); 
+        recalcAttendancePct(libId);
       }
     }
 
@@ -6691,9 +6699,10 @@ async function createDuty() {
     renderCurrentPage();
     toast("Error creating duty – rolled back.");
     console.error(err);
+  } finally {
+    creatingDuty = false;   // ★ release the guard
   }
 }
-
 async function markAttendedFromNotification(recordId, btn) {
   if (btn && btn.disabled) return;
 
