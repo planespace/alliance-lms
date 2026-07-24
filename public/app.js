@@ -3404,6 +3404,7 @@ function renderAttendanceTable(instanceId) {
     <table style="width:100%; font-size:13px; border-collapse:collapse;">
       <thead>
         <tr style="background:#f8fafc; position:sticky; top:48px; z-index:10;">
+          <th style="padding:8px 10px; width:30px;"></th>   <!-- ★ checkbox column -->
           <th style="padding:8px 10px; text-align:left; cursor:pointer;" onclick="sortAttendanceTable('${instanceId}', 'name')">Name${sortArrow('name')}</th>
           <th style="padding:8px 10px; text-align:left; cursor:pointer;" onclick="sortAttendanceTable('${instanceId}', 'grade')">Grade${sortArrow('grade')}</th>
           <th style="padding:8px 10px; text-align:left; cursor:pointer;" onclick="sortAttendanceTable('${instanceId}', 'adm')">Adm No.${sortArrow('adm')}</th>
@@ -3618,9 +3619,13 @@ async function toggleSingleAttendance(recordId, checkbox) {
   // ★ Write the change to localStorage immediately
   saveData();
 
-  // ★ Update the inline status badge (new table layout)
+  // ★ Update the row background and badge instantly
   const row = checkbox.closest('tr');
   if (row) {
+    // Row background
+    row.style.background = newChecked ? "#f0fdf4" : "#fef2f2";
+
+    // Status badge
     const badge = row.querySelector('.attendance-status-badge');
     if (badge) {
       if (newChecked) {
