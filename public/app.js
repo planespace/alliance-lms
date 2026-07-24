@@ -1253,15 +1253,25 @@ function renderDashboard() {
     return true;
   });
   document.getElementById("statDutiesToday").textContent = todayDuties.length;
-  const missed = appData.attendance.filter((a) => !a.attended && !a.forgiven);
+
+  // ★ Only count attendance for active librarians
+  const activeAttendance = appData.attendance.filter((a) => {
+    const lib = getLib(a.librarian_id);
+    return lib && !lib.is_deleted;
+  });
+
+  const missed = activeAttendance.filter((a) => !a.attended && !a.forgiven);
   document.getElementById("statMissed").textContent = missed.length;
-  const allAttendance = appData.attendance;
+
   const statAttendance = document.getElementById("statAttendance");
-  if (allAttendance.length) {
-    const att = allAttendance.filter((a) => a.attended || a.forgiven).length;
+  if (activeAttendance.length) {
+    const att = activeAttendance.filter((a) => a.attended || a.forgiven).length;
     statAttendance.textContent =
-      Math.round((att / allAttendance.length) * 100) + "%";
-  } else statAttendance.textContent = "N/A";
+      Math.round((att / activeAttendance.length) * 100) + "%";
+  } else {
+    statAttendance.textContent = "N/A";
+  }
+
   document.getElementById("dutyBadge").textContent = todayDuties.length;
   populateTagFilterDropdown();
   renderDashboardTable();
@@ -3131,19 +3141,15 @@ async function deleteDuty(dutyId) {
           // 3. Delete the duty itself
           await deleteEntity("duties", dutyId);
 
-          // 4. Update local cache ONLY after all server calls succeeded
-          // Remove attendance records for this duty
+          // ★ Only now update local cache – everything succeeded
           appData.attendance = appData.attendance.filter(
             (a) => !allInstances.some((inst) => inst.id === a.duty_instance_id)
           );
-          // Remove instances
           appData.duty_instances = appData.duty_instances.filter(
             (di) => di.duty_id !== dutyId
           );
-          // Remove the duty
           appData.duties = appData.duties.filter((d) => d.id !== dutyId);
 
-          // Recalculate percentages for affected librarians
           const affectedLibIds = new Set();
           allInstances.forEach(inst => {
             appData.attendance
@@ -3152,17 +3158,17 @@ async function deleteDuty(dutyId) {
           });
           affectedLibIds.forEach(id => recalcAttendancePct(id));
         } else {
-          // --- Stop future occurrences ---
+          // --- Stop future occurrences only ---
           const today = getToday();
           const d = new Date(today);
           d.setDate(d.getDate() - 1);
           const yesterday = d.toISOString().split("T")[0];
 
-          // 1. Set end_date on the server
+          // Set end_date on the server
           duty.end_date = yesterday;
           await saveEntity("duties", duty, duty.id);
 
-          // 2. Delete future instances and their attendance
+          // Delete only future instances and their attendance
           const futureInsts = appData.duty_instances.filter(
             (di) => di.duty_id === dutyId && di.date >= today
           );
@@ -3173,16 +3179,15 @@ async function deleteDuty(dutyId) {
             await deleteEntity("duties/instances", inst.id);
           }
 
-          // 3. Update local cache – remove future attendance and instances, keep the duty (now with end_date)
+          // Update local cache – remove future attendance and instances, keep the duty
           appData.attendance = appData.attendance.filter(
             (a) => !futureInsts.some((inst) => inst.id === a.duty_instance_id)
           );
           appData.duty_instances = appData.duty_instances.filter(
             (di) => !(di.duty_id === dutyId && di.date >= today)
           );
-          // Duty stays in appData.duties – it's just "Ended"
+          // Duty stays in appData.duties – it’s just “Ended”
 
-          // Recalculate percentages for affected librarians
           const affectedLibIds = new Set();
           futureInsts.forEach(inst => {
             appData.attendance
