@@ -65,6 +65,7 @@ let authToken = localStorage.getItem("authToken") || null;
 let currentUser = JSON.parse(localStorage.getItem("currentUser") || "null");
 let devMode = false;
 let attendanceSortState = {};
+let lastAttendanceAction = {};   
 // ============================================
 // ONLINE DATA LAYER (replaces localStorage)
 // ============================================
@@ -3339,7 +3340,6 @@ function renderAttendanceTable(instanceId) {
     const libA = getLib(a.librarian_id);
     const libB = getLib(b.librarian_id);
     let valA, valB;
-
     switch (sortState.key) {
       case "name":
         valA = (libA?.name || "").toLowerCase();
@@ -3358,7 +3358,6 @@ function renderAttendanceTable(instanceId) {
         valB = (libB?.house || "").toLowerCase();
         break;
       case "status":
-        // attended first
         valA = a.attended || a.forgiven ? 1 : 0;
         valB = b.attended || b.forgiven ? 1 : 0;
         break;
@@ -3376,6 +3375,8 @@ function renderAttendanceTable(instanceId) {
     if (sortState.key !== key) return "";
     return sortState.dir === "asc" ? " ▲" : " ▼";
   };
+
+  const hasLastAction = !!lastAttendanceAction[instanceId];
 
   let html = `
     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
@@ -3395,14 +3396,14 @@ function renderAttendanceTable(instanceId) {
                style="padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px; width:180px;" />
         <button class="btn btn-secondary btn-sm" onclick="selectAllAttendance('${instanceId}', true)">✅ All Present</button>
         <button class="btn btn-secondary btn-sm" onclick="selectAllAttendance('${instanceId}', false)">❌ All Absent</button>
+        <button class="btn btn-secondary btn-sm" onclick="undoLastAttendance('${instanceId}')" 
+                ${hasLastAction ? '' : 'disabled'} 
+                title="Undo last action">↩️ Undo</button>
       </div>
     </div>
     <table style="width:100%; font-size:13px; border-collapse:collapse;">
       <thead>
         <tr style="background:#f8fafc; position:sticky; top:48px; z-index:10;">
-          <th style="padding:8px 10px; width:30px;">
-            <input type="checkbox" id="selectAll_${instanceId}" onchange="toggleSelectAllAttendance('${instanceId}', this.checked)">
-          </th>
           <th style="padding:8px 10px; text-align:left; cursor:pointer;" onclick="sortAttendanceTable('${instanceId}', 'name')">Name${sortArrow('name')}</th>
           <th style="padding:8px 10px; text-align:left; cursor:pointer;" onclick="sortAttendanceTable('${instanceId}', 'grade')">Grade${sortArrow('grade')}</th>
           <th style="padding:8px 10px; text-align:left; cursor:pointer;" onclick="sortAttendanceTable('${instanceId}', 'adm')">Adm No.${sortArrow('adm')}</th>
@@ -3417,17 +3418,12 @@ function renderAttendanceTable(instanceId) {
     const lib = getLib(r.librarian_id);
     if (!lib) return;
     const isPresent = r.attended || r.forgiven;
-    const rowBg = isPresent ? "#f0fdf4" : "#fef2f2";   // light green / light red
+    const rowBg = isPresent ? "#f0fdf4" : "#fef2f2";
 
     html += `
       <tr class="attendance-row" data-lib-name="${lib.name.toLowerCase()}" data-lib-adm="${lib.adm_no.toLowerCase()}"
           style="background:${rowBg}; cursor:pointer;"
           onclick="toggleAttendanceRow(this, '${instanceId}')">
-        <td onclick="event.stopPropagation()">
-          <input type="checkbox" class="attendance-check" data-record="${r.id}" 
-                 ${isPresent ? "checked" : ""} 
-                 onchange="toggleSingleAttendance('${r.id}', this)">
-        </td>
         <td>${lib.name}</td>
         <td>${lib.grade}</td>
         <td>${lib.adm_no}</td>
@@ -3446,7 +3442,6 @@ function renderAttendanceTable(instanceId) {
     </table>`;
   return html;
 }
-
 function filterAttendanceTable(instanceId) {
   const searchTerm = document.getElementById(`attendanceSearch_${instanceId}`).value.toLowerCase();
   const rows = document.querySelectorAll(`#attendanceTableBody_${instanceId} .attendance-row`);
@@ -3547,16 +3542,17 @@ async function selectAllAttendance(instId, attended) {
   // Write to localStorage immediately
   saveData();
 
+  // ★ Remember this bulk action as the last action for this duty
+  lastAttendanceAction[instId] = { type: 'bulk', attended };
+
   // Refresh only the visible table content if we are on the attendance page
   if (currentPage === "attendance") {
     const activeTab = document.querySelector("#attendanceContainer .sector-tab.active");
     const activeInstanceId = activeTab?.dataset.instance;
     if (activeInstanceId === instId) {
-      // Refresh the table for this duty
       const wrapper = document.getElementById("attendanceTableWrapper");
       if (wrapper) wrapper.innerHTML = renderAttendanceTable(instId);
     }
-    // Update the tab badge for this duty
     updateAttendanceTabBadge(instId);
   }
 
@@ -3652,6 +3648,9 @@ async function toggleSingleAttendance(recordId, checkbox) {
   if (currentPage === "notifications") {
     renderNotifications();
   }
+
+  // ★ Remember this single action as the last action for this duty
+  lastAttendanceAction[instanceId] = { type: 'single', recordId };
 
   pendingAttendanceSaves.set(recordId, rec);
 
@@ -4261,6 +4260,76 @@ function showNotificationActionPopup(notifId) {
 
   document.getElementById("notificationActionContent").innerHTML = contentHtml;
   openModal("notificationActionModal");
+}
+
+function undoLastAttendance(instanceId) {
+  const action = lastAttendanceAction[instanceId];
+  if (!action) return;
+
+  if (action.type === 'single') {
+    const rec = appData.attendance.find(a => a.id === action.recordId);
+    if (!rec) {
+      delete lastAttendanceAction[instanceId];
+      return;
+    }
+    // Toggle the record back
+    rec.attended = !rec.attended;
+    rec.forgiven = false;
+    rec.confirmed_at = new Date().toISOString();
+    rec.confirmed_by = appData.current_user;
+    recalcAttendancePct(rec.librarian_id);
+    pendingAttendanceSaves.set(rec.id, rec);
+
+    // Update UI: re-render table and tab badge
+    if (currentPage === "attendance") {
+      const activeTab = document.querySelector("#attendanceContainer .sector-tab.active");
+      if (activeTab && activeTab.dataset.instance === instanceId) {
+        const wrapper = document.getElementById("attendanceTableWrapper");
+        if (wrapper) wrapper.innerHTML = renderAttendanceTable(instanceId);
+      }
+      updateAttendanceTabBadge(instanceId);
+    }
+    updateDutyBadge();
+    syncLocalNotifications();
+    toast("↩️ Last toggle undone");
+
+  } else if (action.type === 'bulk') {
+    // Reverse the bulk action: mark all as the opposite
+    const newAttended = !action.attended;
+    const records = appData.attendance.filter(a => a.duty_instance_id === instanceId);
+    records.forEach(r => {
+      r.attended = newAttended;
+      r.forgiven = false;
+      r.confirmed_at = new Date().toISOString();
+      r.confirmed_by = appData.current_user;
+      recalcAttendancePct(r.librarian_id);
+      pendingAttendanceSaves.set(r.id, r);
+    });
+
+    // Update UI
+    if (currentPage === "attendance") {
+      const activeTab = document.querySelector("#attendanceContainer .sector-tab.active");
+      if (activeTab && activeTab.dataset.instance === instanceId) {
+        const wrapper = document.getElementById("attendanceTableWrapper");
+        if (wrapper) wrapper.innerHTML = renderAttendanceTable(instanceId);
+      }
+      updateAttendanceTabBadge(instanceId);
+    }
+    updateDutyBadge();
+    syncLocalNotifications();
+    toast(`↩️ Bulk action undone – all marked ${newAttended ? "present" : "absent"}`);
+  }
+
+  // Save to localStorage immediately
+  saveData();
+
+  // Clear the action so Undo can't be repeated
+  delete lastAttendanceAction[instanceId];
+
+  // Trigger batch save
+  if (attendanceBatchTimer) clearTimeout(attendanceBatchTimer);
+  attendanceBatchTimer = setTimeout(flushAttendanceSaves, 300);
+  showLoading();
 }
 
 async function forgiveAttendanceRecord(recordId) {
