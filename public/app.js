@@ -500,12 +500,20 @@ async function handleLogin() {
   const email = document.getElementById("loginEmail").value.trim();
   const password = document.getElementById("loginPassword").value.trim();
   const errorDiv = document.getElementById("loginError");
+  const loginBtn = document.querySelector("#loginForm .login-btn");
+
   errorDiv.style.display = "none";
+
   if (!email || !password) {
     errorDiv.textContent = "Email and password are required.";
     errorDiv.style.display = "block";
     return;
   }
+
+  // Show loading state
+  loginBtn.disabled = true;
+  loginBtn.textContent = "Signing in…";
+
   try {
     const res = await fetch(`${API_BASE}/auth/login`, {
       method: "POST",
@@ -514,6 +522,7 @@ async function handleLogin() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
+
     authToken = data.token;
     currentUser = data.user;
     localStorage.setItem("authToken", authToken);
@@ -530,6 +539,8 @@ async function handleLogin() {
   } catch (err) {
     errorDiv.textContent = err.message;
     errorDiv.style.display = "block";
+    loginBtn.disabled = false;
+    loginBtn.textContent = "Sign In";
   }
 }
 document.addEventListener("keydown", (e) => {
@@ -556,12 +567,20 @@ async function handleRegister() {
   const password = document.getElementById("regPassword").value;
   const confirm = document.getElementById("regConfirmPassword").value;
   const errorDiv = document.getElementById("registerError");
+  const regBtn = document.querySelector("#registerForm .login-btn");
+
   errorDiv.style.display = "none";
+
   if (password !== confirm) {
     errorDiv.textContent = "Passwords do not match.";
     errorDiv.style.display = "block";
     return;
   }
+
+  // Show loading state
+  regBtn.disabled = true;
+  regBtn.textContent = "Creating account…";
+
   try {
     const res = await fetch(`${API_BASE}/auth/register`, {
       method: "POST",
@@ -570,6 +589,7 @@ async function handleRegister() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
+
     authToken = data.token;
     currentUser = data.user;
     localStorage.setItem("authToken", authToken);
@@ -585,9 +605,10 @@ async function handleRegister() {
   } catch (err) {
     errorDiv.textContent = err.message;
     errorDiv.style.display = "block";
+    regBtn.disabled = false;
+    regBtn.textContent = "Create Account";
   }
 }
-
 // --- FORGOT PASSWORD ---
 async function handleForgotPassword() {
   const email = document.getElementById("forgotEmail").value.trim();
