@@ -3660,7 +3660,6 @@ async function toggleSingleAttendance(recordId, checkbox) {
 
   toast(newChecked ? "✅ Present" : "❌ Absent");
 }
-
 // ============================================
 // ATTENDANCE HISTORY
 // ============================================
