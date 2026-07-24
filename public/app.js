@@ -1368,7 +1368,7 @@ function renderDashboardTable() {
         : "text-success";
     const isRep = tags.some((t) => t.type === "rep");
 
-    // ★ Added fallback "—" for every cell that might be empty
+    // 8 cells, no checkbox
     html += `<tr>
       <td class="${isRep ? "rep-name" : ""}" style="min-width:120px;">${l.name || "—"}</td>
       <td style="min-width:60px;">${l.grade || "—"}</td>
