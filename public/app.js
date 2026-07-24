@@ -3424,6 +3424,11 @@ function renderAttendanceTable(instanceId) {
       <tr class="attendance-row" data-lib-name="${lib.name.toLowerCase()}" data-lib-adm="${lib.adm_no.toLowerCase()}"
           style="background:${rowBg}; cursor:pointer;"
           onclick="toggleAttendanceRow(this, '${instanceId}')">
+        <td onclick="event.stopPropagation()">
+          <input type="checkbox" class="attendance-check" data-record="${r.id}" 
+                 ${isPresent ? "checked" : ""} 
+                 onchange="toggleSingleAttendance('${r.id}', this)">
+        </td>
         <td>${lib.name}</td>
         <td>${lib.grade}</td>
         <td>${lib.adm_no}</td>
