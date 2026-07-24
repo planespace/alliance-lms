@@ -3120,6 +3120,7 @@ async function deleteDuty(dutyId) {
       </div>
     </div>`,
     async () => {
+      isSaving = true;   // ★ lock out background sync while we work
       showLoading();
       try {
         const clearHistory =
@@ -3210,6 +3211,7 @@ async function deleteDuty(dutyId) {
         console.error(err);
         toast("Action failed – your data has been kept as it was.");
       } finally {
+        isSaving = false;   // ★ release the lock
         hideLoading();
       }
     }
