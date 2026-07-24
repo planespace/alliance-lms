@@ -30,6 +30,7 @@ function getCacheKey() {
   const user = currentUser || JSON.parse(localStorage.getItem("currentUser") || "null");
   return user ? `appDataCache_${user.id}` : "appDataCache_guest";
 }
+
 let isSaving = false;
 let generatingMissedNotifications = false;
 let pendingAttendanceSaves = new Map();
@@ -63,6 +64,7 @@ let sectorModalOriginalFooter = "";
 let authToken = localStorage.getItem("authToken") || null;
 let currentUser = JSON.parse(localStorage.getItem("currentUser") || "null");
 let devMode = false;
+let attendanceSortState = {};
 // ============================================
 // ONLINE DATA LAYER (replaces localStorage)
 // ============================================
@@ -3262,8 +3264,10 @@ async function renderAttendance() {
     return;
   }
 
-  // ---- Build tabs ----
-  let html = `<div class="sector-tabs" style="margin-bottom:16px; flex-wrap:wrap;">`;
+  // ---- Sticky tabs wrapper ----
+  let html = `<div style="position:sticky; top:0; z-index:20; background:var(--bg); padding:8px 0 4px 0;">
+    <div class="sector-tabs" style="display:flex; flex-wrap:wrap; gap:6px;">`;
+
   instances.forEach((di, idx) => {
     const duty = appData.duties.find((d) => d.id === di.duty_id);
     if (!duty) return;
@@ -3276,9 +3280,9 @@ async function renderAttendance() {
                <span class="count-badge">${attended}/${records.length}</span>
              </div>`;
   });
-  html += `</div>`;
+  html += `</div></div>`;
 
-  // ---- Table wrapper (first duty) ----
+  // ---- Table wrapper ----
   html += `<div id="attendanceTableWrapper">${renderAttendanceTable(instances[0].id)}</div>`;
 
   container.innerHTML = html;
@@ -3329,12 +3333,49 @@ function renderAttendanceTable(instanceId) {
   const duty = instance ? appData.duties.find((d) => d.id === instance.duty_id) : null;
   if (!duty || !records.length) return '<p class="text-muted">No records.</p>';
 
-  // Sort librarians by name for easy scanning
-  const sortedRecords = records.sort((a, b) => {
+  // ---------- SORT ----------
+  const sortState = attendanceSortState[instanceId] || { key: "name", dir: "asc" };
+  const sortedRecords = [...records].sort((a, b) => {
     const libA = getLib(a.librarian_id);
     const libB = getLib(b.librarian_id);
-    return (libA?.name || "").localeCompare(libB?.name || "");
+    let valA, valB;
+
+    switch (sortState.key) {
+      case "name":
+        valA = (libA?.name || "").toLowerCase();
+        valB = (libB?.name || "").toLowerCase();
+        break;
+      case "grade":
+        valA = (libA?.grade || "").toLowerCase();
+        valB = (libB?.grade || "").toLowerCase();
+        break;
+      case "adm":
+        valA = (libA?.adm_no || "").toLowerCase();
+        valB = (libB?.adm_no || "").toLowerCase();
+        break;
+      case "house":
+        valA = (libA?.house || "").toLowerCase();
+        valB = (libB?.house || "").toLowerCase();
+        break;
+      case "status":
+        // attended first
+        valA = a.attended || a.forgiven ? 1 : 0;
+        valB = b.attended || b.forgiven ? 1 : 0;
+        break;
+      default:
+        return 0;
+    }
+    if (valA < valB) return sortState.dir === "asc" ? -1 : 1;
+    if (valA > valB) return sortState.dir === "asc" ? 1 : -1;
+    return 0;
   });
+
+  // ---------- HTML ----------
+  const attendedCount = records.filter(r => r.attended || r.forgiven).length;
+  const sortArrow = (key) => {
+    if (sortState.key !== key) return "";
+    return sortState.dir === "asc" ? " ▲" : " ▼";
+  };
 
   let html = `
     <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
@@ -3344,7 +3385,7 @@ function renderAttendanceTable(instanceId) {
           ${formatTime(duty.start_time)} – ${formatTime(duty.end_time)}
         </span>
         <span style="font-size:13px; margin-left:8px;" id="attendanceCount_${instanceId}">
-          ${records.filter(r => r.attended || r.forgiven).length}/${records.length} attended
+          ${attendedCount}/${records.length} attended
         </span>
       </div>
       <div>
@@ -3356,32 +3397,35 @@ function renderAttendanceTable(instanceId) {
         <button class="btn btn-secondary btn-sm" onclick="selectAllAttendance('${instanceId}', false)">❌ All Absent</button>
       </div>
     </div>
-    <div class="table-scroll" style="max-height:60vh; overflow-y:auto;">
-      <table style="width:100%; font-size:13px; border-collapse:collapse;">
-        <thead>
-          <tr style="background:#f8fafc; position:sticky; top:0; z-index:1;">
-            <th style="padding:8px 10px; text-align:left; width:30px;">
-              <input type="checkbox" id="selectAll_${instanceId}" onchange="toggleSelectAllAttendance('${instanceId}', this.checked)">
-            </th>
-            <th style="padding:8px 10px; text-align:left;">Name</th>
-            <th style="padding:8px 10px; text-align:left;">Grade</th>
-            <th style="padding:8px 10px; text-align:left;">Adm No.</th>
-            <th style="padding:8px 10px; text-align:left;">House</th>
-            <th style="padding:8px 10px; text-align:center;">Status</th>
-          </tr>
-        </thead>
-        <tbody id="attendanceTableBody_${instanceId}">
+    <table style="width:100%; font-size:13px; border-collapse:collapse;">
+      <thead>
+        <tr style="background:#f8fafc; position:sticky; top:48px; z-index:10;">
+          <th style="padding:8px 10px; width:30px;">
+            <input type="checkbox" id="selectAll_${instanceId}" onchange="toggleSelectAllAttendance('${instanceId}', this.checked)">
+          </th>
+          <th style="padding:8px 10px; text-align:left; cursor:pointer;" onclick="sortAttendanceTable('${instanceId}', 'name')">Name${sortArrow('name')}</th>
+          <th style="padding:8px 10px; text-align:left; cursor:pointer;" onclick="sortAttendanceTable('${instanceId}', 'grade')">Grade${sortArrow('grade')}</th>
+          <th style="padding:8px 10px; text-align:left; cursor:pointer;" onclick="sortAttendanceTable('${instanceId}', 'adm')">Adm No.${sortArrow('adm')}</th>
+          <th style="padding:8px 10px; text-align:left; cursor:pointer;" onclick="sortAttendanceTable('${instanceId}', 'house')">House${sortArrow('house')}</th>
+          <th style="padding:8px 10px; text-align:center; cursor:pointer;" onclick="sortAttendanceTable('${instanceId}', 'status')">Status${sortArrow('status')}</th>
+        </tr>
+      </thead>
+      <tbody id="attendanceTableBody_${instanceId}">
   `;
 
   sortedRecords.forEach((r) => {
     const lib = getLib(r.librarian_id);
     if (!lib) return;
-    const checked = r.attended || r.forgiven;
+    const isPresent = r.attended || r.forgiven;
+    const rowBg = isPresent ? "#f0fdf4" : "#fef2f2";   // light green / light red
+
     html += `
-      <tr class="attendance-row" data-lib-name="${lib.name.toLowerCase()}" data-lib-adm="${lib.adm_no.toLowerCase()}">
-        <td>
+      <tr class="attendance-row" data-lib-name="${lib.name.toLowerCase()}" data-lib-adm="${lib.adm_no.toLowerCase()}"
+          style="background:${rowBg}; cursor:pointer;"
+          onclick="toggleAttendanceRow(this, '${instanceId}')">
+        <td onclick="event.stopPropagation()">
           <input type="checkbox" class="attendance-check" data-record="${r.id}" 
-                 ${checked ? "checked" : ""} 
+                 ${isPresent ? "checked" : ""} 
                  onchange="toggleSingleAttendance('${r.id}', this)">
         </td>
         <td>${lib.name}</td>
@@ -3390,18 +3434,16 @@ function renderAttendanceTable(instanceId) {
         <td>${lib.house || "—"}</td>
         <td style="text-align:center;">
           <span class="attendance-status-badge" style="display:inline-block; padding:2px 12px; border-radius:12px; font-size:12px; font-weight:600; 
-                ${checked ? "background:#dcfce7; color:#166534;" : "background:#fee2e2; color:#991b1b;"}">
-            ${checked ? "Present" : "Absent"}
+                ${isPresent ? "background:#dcfce7; color:#166534;" : "background:#fee2e2; color:#991b1b;"}">
+            ${isPresent ? "Present" : "Absent"}
           </span>
         </td>
       </tr>`;
   });
 
   html += `
-        </tbody>
-      </table>
-    </div>`;
-
+      </tbody>
+    </table>`;
   return html;
 }
 
@@ -3413,6 +3455,32 @@ function filterAttendanceTable(instanceId) {
     const adm = row.dataset.libAdm;
     row.style.display = (name.includes(searchTerm) || adm.includes(searchTerm)) ? "" : "none";
   });
+}
+
+// Toggle attendance by clicking anywhere on the row (except the checkbox itself)
+function toggleAttendanceRow(row, instanceId) {
+  const checkbox = row.querySelector(".attendance-check");
+  if (checkbox) {
+    checkbox.checked = !checkbox.checked;
+    checkbox.dispatchEvent(new Event('change'));
+  }
+}
+
+// Sort the attendance table by a given column
+function sortAttendanceTable(instanceId, key) {
+  const current = attendanceSortState[instanceId] || { key: "name", dir: "asc" };
+  if (current.key === key) {
+    current.dir = current.dir === "asc" ? "desc" : "asc";
+  } else {
+    current.key = key;
+    current.dir = "asc";
+  }
+  attendanceSortState[instanceId] = current;
+  // Re-render the table for this instance
+  const wrapper = document.getElementById("attendanceTableWrapper");
+  if (wrapper) {
+    wrapper.innerHTML = renderAttendanceTable(instanceId);
+  }
 }
 
 function toggleSelectAllAttendance(instanceId, checked) {
