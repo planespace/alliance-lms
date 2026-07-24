@@ -3622,10 +3622,8 @@ async function toggleSingleAttendance(recordId, checkbox) {
   // ★ Update the row background and badge instantly
   const row = checkbox.closest('tr');
   if (row) {
-    // Row background
     row.style.background = newChecked ? "#f0fdf4" : "#fef2f2";
 
-    // Status badge
     const badge = row.querySelector('.attendance-status-badge');
     if (badge) {
       if (newChecked) {
@@ -3644,7 +3642,6 @@ async function toggleSingleAttendance(recordId, checkbox) {
   const instanceId = rec.duty_instance_id;
   updateAttendanceTabBadge(instanceId);
 
-  // Also update the count text inside the table header
   const countEl = document.getElementById(`attendanceCount_${instanceId}`);
   if (countEl) {
     const records = appData.attendance.filter(a => a.duty_instance_id === instanceId);
@@ -3661,6 +3658,15 @@ async function toggleSingleAttendance(recordId, checkbox) {
 
   // ★ Remember this single action as the last action for this duty
   lastAttendanceAction[instanceId] = { type: 'single', recordId };
+
+  // ★ Instantly enable the Undo button for this duty
+  const undoBtn = document.querySelector(`#attendanceTableBody_${instanceId}`)?.closest('table')?.previousElementSibling?.querySelector('button[onclick*="undoLastAttendance"]');
+  // Easier: find the button by its onclick attribute in the whole container
+  const container = document.getElementById("attendanceContainer");
+  if (container) {
+    const btn = container.querySelector(`button[onclick="undoLastAttendance('${instanceId}')"]`);
+    if (btn) btn.disabled = false;
+  }
 
   pendingAttendanceSaves.set(recordId, rec);
 
