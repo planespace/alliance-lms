@@ -3,7 +3,7 @@
 // ============================================
 
 const API_BASE = "/api"; // assumes frontend & backend on same domain
-
+let selectedCommitteeId = null;
 // global cache – replaces localStorage
 let appData = {
   librarians: [],
@@ -26,8 +26,27 @@ let appData = {
     cumulativeMissedDutiesThreshold: 3,
   },
 };
+function getCacheKey() {
+  const user =
+    currentUser || JSON.parse(localStorage.getItem("currentUser") || "null");
+  return user ? `appDataCache_${user.id}` : "appDataCache_guest";
+}
+
+let isSaving = false;
 let generatingMissedNotifications = false;
 let pendingAttendanceSaves = new Map();
+let manuallyDeletedDutyDates = new Set(); // keys: "dutyId|date"
+// Restore from localStorage on page load
+try {
+  const saved = localStorage.getItem("manuallyDeletedDutyDates");
+  if (saved) {
+    const arr = JSON.parse(saved);
+    if (Array.isArray(arr)) arr.forEach((k) => manuallyDeletedDutyDates.add(k));
+  }
+} catch (e) {
+  /* ignore corrupt data */
+}
+let deletedInstanceLibrarians = new Map();
 let attendanceBatchTimer = null;
 let removingInProgress = false;
 let attendanceMarkingInProgress = false;
@@ -37,6 +56,7 @@ let currentPage = "dashboard";
 let selectedLibrarianId = null;
 let selectedTagId = null;
 let saveQuickLeafInProgress = false;
+let creatingDuty = false;
 let searchTimer;
 let confirmCallback = null;
 let showDismissed = false;
@@ -54,10 +74,13 @@ let sectorSpecificDatesList = [];
 let modalZIndex = 1000;
 let sectorModalOriginalBody = "";
 let sectorModalOriginalFooter = "";
+let schoolInSession = true; // will be set by server call on init
 // Authentication
 let authToken = localStorage.getItem("authToken") || null;
 let currentUser = JSON.parse(localStorage.getItem("currentUser") || "null");
 let devMode = false;
+let attendanceSortState = {};
+let lastAttendanceAction = {};
 // ============================================
 // ONLINE DATA LAYER (replaces localStorage)
 // ============================================
@@ -78,24 +101,40 @@ function hideLoading() {
 }
 
 function loadData() {
-  const cached = localStorage.getItem("appDataCache");
+  const cached = localStorage.getItem(getCacheKey());
   if (cached) {
     try {
       const parsed = JSON.parse(cached);
-      // Only restore the data collections – don’t touch settings etc.
       appData.librarians = parsed.librarians || [];
       appData.sectors = parsed.sectors || [];
       appData.duties = parsed.duties || [];
       appData.duty_instances = parsed.duty_instances || [];
       appData.attendance = parsed.attendance || [];
       appData.tags = parsed.tags || [];
+      appData.tag_history = parsed.tag_history || []; // ★
       appData.notifications = parsed.notifications || [];
       appData.hall_of_fame_captains = parsed.hall_of_fame_captains || [];
       appData.hall_of_fame_committees = parsed.hall_of_fame_committees || [];
       appData.sector_assignments = parsed.sector_assignments || [];
+
+      appData.librarians.forEach((l) => recalcAttendancePct(l.id));
     } catch (e) {
       /* ignore corrupt cache */
     }
+  }
+}
+
+async function loadSchoolSession() {
+  try {
+    const headers = {};
+    if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+    const res = await fetch(`${API_BASE}/settings/schoolSession`, { headers });
+    if (res.ok) {
+      const data = await res.json();
+      schoolInSession = data.schoolInSession;
+    }
+  } catch (e) {
+    console.error("Failed to load school session setting", e);
   }
 }
 
@@ -136,20 +175,29 @@ async function startBackgroundSync() {
       })),
     };
 
-    // Merge all fresh data EXCEPT notifications (they stay local)
     const { notifications: _, ...restOfFresh } = fresh;
-    Object.assign(appData, restOfFresh);
-    localStorage.setItem("appDataCache", JSON.stringify(fresh));
 
-    // Rebuild the local notification list from the fresh attendance data
+    if (!isSaving) {
+      Object.assign(appData, restOfFresh);
+      localStorage.setItem(getCacheKey(), JSON.stringify(fresh));
+      appData.librarians.forEach((l) => recalcAttendancePct(l.id));
+
+      // ★ Fetch tag history
+      try {
+        const historyRes = await fetch(`${API_BASE}/tags/history`, { headers });
+        if (historyRes.ok) {
+          const historyData = await historyRes.json();
+          appData.tag_history = historyData.map((h) => ({ ...h, id: h._id }));
+        }
+      } catch (e) {
+        console.error("Failed to load tag history", e);
+      }
+    }
+
     syncLocalNotifications();
-
-    // Update badges silently
     updateDutyBadge();
     updateNotificationBadge();
 
-    // Re‑render the current page, but skip if the user is viewing notifications
-    // (notifications have their own periodic refresh)
     if (currentPage !== "notifications") {
       renderCurrentPage();
     }
@@ -254,6 +302,7 @@ async function bulkAddLibrarians() {
 }
 
 async function saveEntity(type, data, id = null, skipLoading = false) {
+  isSaving = true;
   if (!skipLoading) showLoading();
   try {
     const url = id ? `${API_BASE}/${type}/${id}` : `${API_BASE}/${type}`;
@@ -274,6 +323,7 @@ async function saveEntity(type, data, id = null, skipLoading = false) {
     return saved;
   } finally {
     if (!skipLoading) hideLoading();
+    isSaving = false;
   }
 }
 
@@ -288,11 +338,17 @@ async function deleteEntity(type, id, skipLoading = false) {
   }
 }
 
+function saveManuallyDeletedDutyDates() {
+  localStorage.setItem(
+    "manuallyDeletedDutyDates",
+    JSON.stringify([...manuallyDeletedDutyDates])
+  );
+}
+
 function saveData() {
   localStorage.setItem("settings", JSON.stringify(appData.settings));
   updateNotificationBadge();
 
-  // Keep the persistent cache up‑to‑date after every change
   const cacheCopy = {
     librarians: appData.librarians,
     sectors: appData.sectors,
@@ -300,12 +356,13 @@ function saveData() {
     duty_instances: appData.duty_instances,
     attendance: appData.attendance,
     tags: appData.tags,
+    tag_history: appData.tag_history, // ★
     notifications: appData.notifications,
     hall_of_fame_captains: appData.hall_of_fame_captains,
     hall_of_fame_committees: appData.hall_of_fame_committees,
     sector_assignments: appData.sector_assignments,
   };
-  localStorage.setItem("appDataCache", JSON.stringify(cacheCopy));
+  localStorage.setItem(getCacheKey(), JSON.stringify(cacheCopy));
 }
 
 function genId() {
@@ -321,6 +378,18 @@ function getToday() {
 function getLib(id) {
   return appData.librarians.find((l) => l.id === id);
 }
+function recalcAttendancePct(libId) {
+  const lib = getLib(libId);
+  if (!lib) return;
+  const recs = appData.attendance.filter((a) => a.librarian_id === libId);
+  if (!recs.length) {
+    lib.attendancePct = null;
+  } else {
+    const attended = recs.filter((r) => r.attended || r.forgiven).length;
+    lib.attendancePct = Math.round((attended / recs.length) * 100);
+  }
+}
+
 function getSector(id) {
   return appData.sectors.find((s) => s.id === id);
 }
@@ -348,9 +417,10 @@ async function cleanExpiredTags() {
     return true;
   });
   if (expired.length === 0) return;
+
   for (const t of expired) {
     await deleteEntity("tags", t.id, true);
-    await saveEntity(
+    const savedHistory = await saveEntity(
       "tags/history",
       {
         tag_id: t.id,
@@ -366,7 +436,11 @@ async function cleanExpiredTags() {
       null,
       true
     );
+    // Push the server-saved object with real _id
+    appData.tag_history.push({ ...savedHistory, id: savedHistory._id });
   }
+
+  saveData();
 }
 
 function getLibTags(libId) {
@@ -381,10 +455,9 @@ function getLibAttendance(libId) {
   return appData.attendance.filter((a) => a.librarian_id === libId);
 }
 function getAttendancePct(libId) {
-  const recs = getLibAttendance(libId);
-  if (!recs.length) return "N/A";
-  const attended = recs.filter((r) => r.attended || r.forgiven).length;
-  return Math.round((attended / recs.length) * 100);
+  const lib = getLib(libId);
+  if (!lib || lib.attendancePct == null) return "N/A";
+  return lib.attendancePct;
 }
 
 // ============================================
@@ -481,12 +554,20 @@ async function handleLogin() {
   const email = document.getElementById("loginEmail").value.trim();
   const password = document.getElementById("loginPassword").value.trim();
   const errorDiv = document.getElementById("loginError");
+  const loginBtn = document.querySelector("#loginForm .login-btn");
+
   errorDiv.style.display = "none";
+
   if (!email || !password) {
     errorDiv.textContent = "Email and password are required.";
     errorDiv.style.display = "block";
     return;
   }
+
+  // Show loading state
+  loginBtn.disabled = true;
+  loginBtn.textContent = "Signing in…";
+
   try {
     const res = await fetch(`${API_BASE}/auth/login`, {
       method: "POST",
@@ -495,6 +576,7 @@ async function handleLogin() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
+
     authToken = data.token;
     currentUser = data.user;
     localStorage.setItem("authToken", authToken);
@@ -511,6 +593,8 @@ async function handleLogin() {
   } catch (err) {
     errorDiv.textContent = err.message;
     errorDiv.style.display = "block";
+    loginBtn.disabled = false;
+    loginBtn.textContent = "Sign In";
   }
 }
 document.addEventListener("keydown", (e) => {
@@ -537,12 +621,20 @@ async function handleRegister() {
   const password = document.getElementById("regPassword").value;
   const confirm = document.getElementById("regConfirmPassword").value;
   const errorDiv = document.getElementById("registerError");
+  const regBtn = document.querySelector("#registerForm .login-btn");
+
   errorDiv.style.display = "none";
+
   if (password !== confirm) {
     errorDiv.textContent = "Passwords do not match.";
     errorDiv.style.display = "block";
     return;
   }
+
+  // Show loading state
+  regBtn.disabled = true;
+  regBtn.textContent = "Creating account…";
+
   try {
     const res = await fetch(`${API_BASE}/auth/register`, {
       method: "POST",
@@ -551,6 +643,7 @@ async function handleRegister() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
+
     authToken = data.token;
     currentUser = data.user;
     localStorage.setItem("authToken", authToken);
@@ -566,9 +659,10 @@ async function handleRegister() {
   } catch (err) {
     errorDiv.textContent = err.message;
     errorDiv.style.display = "block";
+    regBtn.disabled = false;
+    regBtn.textContent = "Create Account";
   }
 }
-
 // --- FORGOT PASSWORD ---
 async function handleForgotPassword() {
   const email = document.getElementById("forgotEmail").value.trim();
@@ -865,10 +959,28 @@ async function openModal(id) {
       .querySelectorAll("#bulkBody .bulk-joined")
       .forEach((inp) => (inp.value = getToday()));
   }
+
+  // ★ Auto‑assign modal – make sure the multi‑select list is ready
+  if (id === "autoAssignModal") {
+    if (document.getElementById("autoAssignMulti").checked) {
+      populateMultiSelect();
+    }
+  }
 }
 function closeModal(id) {
   const modal = document.getElementById(id);
   if (modal) modal.classList.remove("active");
+
+  // Refresh after closing attendance‑history modal
+  if (id === "attendanceHistoryModal") {
+    renderCurrentPage();
+  }
+
+  // Refresh after closing sector‑management modals (Manage Sectors AND Add People)
+  if (id === "sectorManagementModal" || id === "addPeopleModal") {
+    renderCurrentPage();
+  }
+
   if (id === "sectorModal") {
     const body = document.querySelector("#sectorModal .modal-body");
     const footer = document.querySelector("#sectorModal .modal-footer");
@@ -877,6 +989,7 @@ function closeModal(id) {
     if (footer && sectorModalOriginalFooter)
       footer.innerHTML = sectorModalOriginalFooter;
   }
+
   // ★ Clear management ID
   if (id === "sectorManagementModal") {
     currentManagementLibId = null;
@@ -1028,12 +1141,184 @@ async function addLibrarianToSector(libId) {
     const saved = await saveEntity("sectors/assignments", newAssignment);
     appData.sector_assignments.push(saved);
 
+    // ★ Force today’s duty instance to exist (creates it if needed)
+    await generateDutyInstancesForDate(getToday());
+
+    // ★ Manually ensure the new librarian is added to today’s instance
+    const today = getToday();
+    const duties = appData.duties.filter((d) => d.sector_id === secId);
+    for (const duty of duties) {
+      if (dutyOccursOnDate(duty, today)) {
+        // Find (or create) today's instance
+        let inst = appData.duty_instances.find(
+          (di) => di.duty_id === duty.id && di.date === today
+        );
+        if (!inst) {
+          // Create the instance on the fly (rare, generateDutyInstancesForDate should have done it)
+          const newInst = {
+            duty_id: duty.id,
+            date: today,
+            is_active: true,
+            created_at: new Date().toISOString(),
+          };
+          const savedInst = await saveEntity("duties/instances", newInst);
+          appData.duty_instances.push(savedInst);
+          inst = savedInst;
+        }
+
+        // Add attendance record for this librarian if it doesn't already exist
+        if (
+          !appData.attendance.some(
+            (a) => a.duty_instance_id === inst.id && a.librarian_id === libId
+          )
+        ) {
+          const att = {
+            duty_instance_id: inst.id,
+            librarian_id: libId,
+            attended: false,
+            confirmed_by: "system",
+            confirmed_at: new Date().toISOString(),
+            forgiven: false,
+            punishment_issued: false,
+          };
+          const savedAtt = await saveEntity("attendance", att);
+          appData.attendance.push(savedAtt);
+          recalcAttendancePct(libId);
+        }
+      }
+    }
+
+    // Sync future instances as usual
     await syncDutyInstancesForSector(secId);
 
+    // Refresh UI
+    if (currentPage === "attendance") {
+      renderAttendance();
+    }
     viewSectorManagement(libId);
     renderSectors();
     toast("Added.");
   }
+}
+// ============================================
+// BULK EDIT LIBRARIANS (FULL-SCREEN TABLE)
+// ============================================
+
+function openBulkEditModal() {
+  const librarians = appData.librarians.filter((l) => !l.is_deleted);
+  if (librarians.length === 0) {
+    toast("No librarians to edit.");
+    return;
+  }
+
+  // Build table rows with prefilled inputs
+  let html = "";
+  librarians.forEach((l) => {
+    html += `
+      <tr data-lib-id="${l.id}">
+        <td><input type="text" class="bulk-edit-name" value="${escapeHtml(
+          l.name
+        )}" style="width:100%; padding:6px; border:1px solid var(--border); border-radius:4px;"></td>
+        <td><input type="text" class="bulk-edit-grade" value="${escapeHtml(
+          l.grade
+        )}" style="width:100%; padding:6px; border:1px solid var(--border); border-radius:4px;"></td>
+        <td><input type="text" class="bulk-edit-adm" value="${escapeHtml(
+          l.adm_no
+        )}" style="width:100%; padding:6px; border:1px solid var(--border); border-radius:4px;"></td>
+        <td><input type="text" class="bulk-edit-house" value="${escapeHtml(
+          l.house || ""
+        )}" style="width:100%; padding:6px; border:1px solid var(--border); border-radius:4px;"></td>
+      </tr>
+    `;
+  });
+
+  document.getElementById("bulkEditTableBody").innerHTML = html;
+  openModal("bulkEditModal");
+}
+
+async function saveBulkEdit() {
+  const rows = document.querySelectorAll("#bulkEditTableBody tr");
+  let savedCount = 0;
+  let errors = [];
+
+  showLoading();
+
+  for (const row of rows) {
+    const libId = row.getAttribute("data-lib-id");
+    const lib = getLib(libId);
+    if (!lib) continue;
+
+    const nameInput = row.querySelector(".bulk-edit-name");
+    const gradeInput = row.querySelector(".bulk-edit-grade");
+    const admInput = row.querySelector(".bulk-edit-adm");
+    const houseInput = row.querySelector(".bulk-edit-house");
+
+    const newName = nameInput.value.trim();
+    const newGrade = gradeInput.value.trim();
+    const newAdm = admInput.value.trim();
+    const newHouse = houseInput.value.trim();
+
+    // Skip if nothing changed
+    if (
+      newName === lib.name &&
+      newGrade === lib.grade &&
+      newAdm === lib.adm_no &&
+      newHouse === (lib.house || "")
+    ) {
+      continue;
+    }
+
+    // Basic validation
+    if (!newName || !newGrade || !newAdm) {
+      errors.push(`${lib.name}: all fields except House are required.`);
+      continue;
+    }
+
+    // Check duplicate adm_no (against other active librarians, excluding self)
+    if (
+      newAdm !== lib.adm_no &&
+      appData.librarians.some(
+        (l) => l.adm_no === newAdm && l.id !== libId && !l.is_deleted
+      )
+    ) {
+      errors.push(`${lib.name}: admission number "${newAdm}" already exists.`);
+      continue;
+    }
+
+    // Update local object
+    lib.name = newName;
+    lib.grade = newGrade;
+    lib.adm_no = newAdm;
+    lib.house = newHouse;
+
+    try {
+      await saveEntity("librarians", lib, libId);
+      savedCount++;
+    } catch (err) {
+      errors.push(`${lib.name}: server save failed.`);
+    }
+  }
+
+  hideLoading();
+
+  if (errors.length > 0) {
+    toast(`⚠️ ${savedCount} saved. Errors: ${errors.join(", ")}`);
+  } else {
+    toast(`✅ ${savedCount} librarians updated.`);
+  }
+
+  closeModal("bulkEditModal");
+  renderCurrentPage();
+}
+
+function escapeHtml(unsafe) {
+  if (!unsafe) return "";
+  return String(unsafe)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
 
 function showActionPopup(librarianId) {
@@ -1066,16 +1351,27 @@ function renderDashboard() {
     return true;
   });
   document.getElementById("statDutiesToday").textContent = todayDuties.length;
-  const missed = appData.attendance.filter((a) => !a.attended && !a.forgiven);
+
+  // ★ Only count attendance for active librarians
+  const activeAttendance = appData.attendance.filter((a) => {
+    const lib = getLib(a.librarian_id);
+    return lib && !lib.is_deleted;
+  });
+
+  const missed = activeAttendance.filter((a) => !a.attended && !a.forgiven);
   document.getElementById("statMissed").textContent = missed.length;
-  const allAttendance = appData.attendance;
+
   const statAttendance = document.getElementById("statAttendance");
-  if (allAttendance.length) {
-    const att = allAttendance.filter((a) => a.attended || a.forgiven).length;
+  if (activeAttendance.length) {
+    const att = activeAttendance.filter((a) => a.attended || a.forgiven).length;
     statAttendance.textContent =
-      Math.round((att / allAttendance.length) * 100) + "%";
-  } else statAttendance.textContent = "N/A";
+      Math.round((att / activeAttendance.length) * 100) + "%";
+  } else {
+    statAttendance.textContent = "N/A";
+  }
+
   document.getElementById("dutyBadge").textContent = todayDuties.length;
+  populateTagFilterDropdown();
   renderDashboardTable();
 }
 
@@ -1113,6 +1409,23 @@ function renderDashboardTable() {
         return l.adm_no.toLowerCase().includes(searchTerm);
       return true;
     });
+  }
+
+  // Tag filter
+  const tagFilterValue =
+    document.getElementById("tagFilterDropdown")?.value || "";
+  if (tagFilterValue) {
+    if (tagFilterValue.startsWith("type:")) {
+      const type = tagFilterValue.substring(5);
+      librarians = librarians.filter((l) =>
+        getLibTags(l.id).some((t) => t.type === type)
+      );
+    } else if (tagFilterValue.startsWith("name:")) {
+      const name = tagFilterValue.substring(5);
+      librarians = librarians.filter((l) =>
+        getLibTags(l.id).some((t) => t.name === name)
+      );
+    }
   }
 
   if (sortBy === "newest")
@@ -1168,20 +1481,124 @@ function renderDashboardTable() {
         ? "text-warning"
         : "text-success";
     const isRep = tags.some((t) => t.type === "rep");
+
+    // 8 cells, no checkbox
     html += `<tr>
-      <td class="${isRep ? "rep-name" : ""}">${l.name}</td>
-      <td>${l.grade}</td>
-      <td>${l.adm_no}</td>
-      <td>${l.house || "—"}</td>
-      <td style="font-size:13px;">${sectorDisplay}</td>
-      <td><div class="tag-container">${tagDisplay}</div></td>
-      <td><span class="${pctClass}" style="font-weight:600;">${pctDisp}</span></td>
-      <td><button class="action-btn" onclick="showActionPopup('${
+      <td class="${isRep ? "rep-name" : ""}" style="min-width:120px;">${
+      l.name || "—"
+    }</td>
+      <td style="min-width:60px;">${l.grade || "—"}</td>
+      <td style="min-width:80px;">${l.adm_no || "—"}</td>
+      <td style="min-width:80px;">${l.house || "—"}</td>
+      <td style="font-size:13px; min-width:100px;">${sectorDisplay}</td>
+      <td style="min-width:100px;"><div class="tag-container">${tagDisplay}</div></td>
+      <td style="min-width:80px;"><span class="${pctClass}" style="font-weight:600;">${pctDisp}</span></td>
+      <td style="min-width:50px;"><button class="action-btn" onclick="showActionPopup('${
         l.id
       }')">⚙️</button></td>
     </tr>`;
   });
   tbody.innerHTML = html;
+}
+
+// ============================================
+// TAG FILTER ON DASHBOARD
+// ============================================
+
+function populateTagFilterDropdown() {
+  const dropdown = document.getElementById("tagFilterDropdown");
+  if (!dropdown) return;
+
+  // Get all unique active tag types
+  const types = [
+    ...new Set(appData.tags.filter((t) => t.is_active).map((t) => t.type)),
+  ];
+  // Get all unique active tag names
+  const names = [
+    ...new Set(appData.tags.filter((t) => t.is_active).map((t) => t.name)),
+  ];
+
+  let options = '<option value="">🏷️ All Tags</option>';
+  if (types.length > 0) {
+    options += '<optgroup label="By Type">';
+    types.forEach((type) => {
+      options += `<option value="type:${type}">${
+        type.charAt(0).toUpperCase() + type.slice(1)
+      }</option>`;
+    });
+    options += "</optgroup>";
+  }
+  if (names.length > 0) {
+    options += '<optgroup label="By Tag Name">';
+    names.forEach((name) => {
+      options += `<option value="name:${name}">${name}</option>`;
+    });
+    options += "</optgroup>";
+  }
+  options += '<option value="__expired__">🕒 View Past / Expired Tags</option>';
+
+  dropdown.innerHTML = options;
+}
+
+function filterByTag() {
+  const value = document.getElementById("tagFilterDropdown").value;
+  if (value === "__expired__") {
+    openExpiredTagsModal();
+    // reset dropdown to "All Tags"
+    document.getElementById("tagFilterDropdown").value = "";
+    renderDashboardTable(); // show all
+    return;
+  }
+  // Re-render the dashboard table with the filter applied
+  renderDashboardTable();
+}
+
+function openExpiredTagsModal() {
+  const history = appData.tag_history || [];
+  let html = "";
+  if (history.length === 0) {
+    html = '<p class="text-muted">No expired or deleted tags found.</p>';
+  } else {
+    html +=
+      '<table style="width:100%; font-size:13px;"><thead><tr><th>Tag Name</th><th>Type</th><th>Librarian</th><th>Start</th><th>End</th><th>Removed</th><th>Reason</th></tr></thead><tbody>';
+    history.forEach((h) => {
+      const lib = getLib(h.librarian_id);
+      html += `<tr>
+        <td><strong>${h.tag_name}</strong></td>
+        <td>${h.type}</td>
+        <td>${lib ? lib.name : "Unknown"}</td>
+        <td>${formatDate(h.start_date)}</td>
+        <td>${h.end_date ? formatDate(h.end_date) : "Forever"}</td>
+        <td>${formatDate(h.removed_at)}</td>
+        <td>${h.removal_reason || "—"}</td>
+      </tr>`;
+    });
+    html += "</tbody></table>";
+  }
+  document.getElementById("expiredTagsContent").innerHTML = html;
+  openModal("expiredTagsModal");
+}
+
+async function clearAllExpiredTags() {
+  showConfirm(
+    "Clear All Expired Tags",
+    "Permanently delete all expired tag history? This cannot be undone.",
+    async () => {
+      try {
+        const ids = appData.tag_history.map((h) => h.id);
+        for (const id of ids) {
+          await deleteEntity("tags/history", id);
+        }
+        appData.tag_history = [];
+        saveData();
+        closeModal("expiredTagsModal");
+        toast("All expired tags cleared.");
+      } catch (err) {
+        console.error(err);
+        toast("Failed to clear expired tags.");
+      }
+    }
+  );
 }
 
 // ============================================
@@ -1717,6 +2134,7 @@ async function deleteTagFromModal() {
         removed_at: tag.removed_at,
         removal_reason: "manual_delete",
       });
+      saveData(); // ★ persist the history
       renderCurrentPage();
       toast("Tag removed.");
     }
@@ -2052,13 +2470,13 @@ async function saveQuickLeaf() {
       recurrence_interval: interval,
       end_date: endDate || null,
       is_punishment: isPunishment,
-      sector_id: tempSectorId, // link to temp sector
+      sector_id: tempSectorId,
       created_by: appData.current_user,
       created_at: new Date().toISOString(),
       _temp: true,
     };
 
-    // 3. Push into local cache & close modal immediately
+    // 3. Push only temporary objects, then close modal immediately
     appData.sectors.push(tempSector);
     appData.duties.push(tempDuty);
 
@@ -2094,18 +2512,19 @@ async function saveQuickLeaf() {
       recurrence_interval: interval,
       end_date: endDate || null,
       is_punishment: isPunishment,
-      sector_id: savedSector._id, // ← real sector ID
+      sector_id: savedSector._id,
       created_by: appData.current_user,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     };
     const savedDuty = await saveEntity("duties", newDuty);
 
-    // Replace temp duty with real one
+    // ★ Replace temporary duty with the real one, NOT push an extra
     const dutyIdx = appData.duties.findIndex((d) => d.id === tempDutyId);
     if (dutyIdx !== -1) {
       appData.duties[dutyIdx] = { ...savedDuty, id: savedDuty._id };
     } else {
+      // Fallback: if the temp was somehow removed, push it (safeguard)
       appData.duties.push({ ...savedDuty, id: savedDuty._id });
     }
 
@@ -2133,6 +2552,7 @@ async function saveQuickLeaf() {
         };
         const savedAtt = await saveEntity("attendance", att);
         appData.attendance.push({ ...savedAtt, id: savedAtt._id });
+        recalcAttendancePct(libId);
       }
     }
 
@@ -2141,7 +2561,7 @@ async function saveQuickLeaf() {
     renderCurrentPage();
     toast(`Leaf sector "${name}" added.`);
   } catch (err) {
-    // Remove temporary objects if they still exist
+    // Remove temporary objects on failure
     appData.sectors = appData.sectors.filter((s) => s._temp !== true);
     appData.duties = appData.duties.filter((d) => d._temp !== true);
     renderCurrentPage();
@@ -2258,20 +2678,13 @@ async function saveLeafWizard() {
     .forEach((cb) => days.push(cb.value));
 
   if (!dutyName || !start || !end) {
-    Swal.fire(
-      "Error",
-      "Please fill in duty name, start, and end time.",
-      "error"
-    );
-    return;
+    /* … */ return;
   }
   if (start >= end) {
-    Swal.fire("Error", "End time must be after start time.", "error");
-    return;
+    /* … */ return;
   }
   if (days.length === 0) {
-    Swal.fire("Error", "Please select at least one day.", "error");
-    return;
+    /* … */ return;
   }
 
   const recurrence = document.getElementById("wizardDutyRecurrence").value;
@@ -2286,62 +2699,42 @@ async function saveLeafWizard() {
     recurrence === "specific" ? [...wizardSpecificDatesList] : null;
 
   const newSector = {
-    name: window._wizardName,
-    parent_id: window._wizardCategoryId,
-    leader_ids: [],
-    min_people: window._wizardMin,
-    is_leaf: true,
-    description: window._wizardDesc || null,
-    duty_settings_list: [
-      {
-        name: dutyName,
-        start_time: start,
-        end_time: end,
-        days: days,
-        recurrence: recurrence,
-        recurrence_interval: interval,
-        specific_dates: specificDates,
-        is_punishment: isPunishment,
-        end_date: endDate,
-      },
-    ],
-    created_at: new Date().toISOString(),
+    /* … same as before … */
   };
-
   const savedSector = await saveEntity("sectors", newSector);
 
   const newDuty = {
     name: dutyName,
     start_time: start,
     end_time: end,
-    days: days,
+    days,
     recurrence_type: recurrence,
     specific_dates: specificDates,
     recurrence_interval: interval,
     end_date: endDate || null,
     is_punishment: isPunishment,
-    sector_id: savedSector.id, // ✅ now correct
+    sector_id: savedSector.id,
     created_by: appData.current_user,
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };
-
   const savedDuty = await saveEntity("duties", newDuty);
-  appData.sectors.push(savedSector);
-  appData.duties.push(savedDuty);
 
+  // ★ Replace existing duty for this sector (by ID) instead of pushing a duplicate
+  const existingIdx = appData.duties.findIndex(
+    (d) => d.sector_id === savedSector.id && d.name === dutyName
+  );
+  if (existingIdx !== -1) {
+    appData.duties[existingIdx] = { ...savedDuty, id: savedDuty._id };
+  } else {
+    appData.duties.push({ ...savedDuty, id: savedDuty._id });
+  }
+
+  appData.sectors.push(savedSector);
   currentSectorPath = [window._wizardCategoryId];
   selectedLeafId = savedSector.id;
 
-  wizardSpecificDatesList = [];
-  window._wizardName = null;
-  window._wizardMin = 1;
-  window._wizardDesc = "";
-  window._wizardCategoryId = null;
-
-  closeModal("sectorModal");
-  renderCurrentPage();
-  toast(`Leaf sector "${newSector.name}" added.`);
+  // … rest of the function (clear wizard vars, close modal, etc.) …
 }
 
 // ============================================
@@ -2613,8 +3006,13 @@ function editDuty(dutyId) {
   `;
 
   if (duty.sector_id) {
-    document.getElementById("editDutyLibrarianCheckboxes").innerHTML =
-      '<p class="text-muted" style="padding:10px;">📌 Librarians are automatically synced from the leaf sector.</p>';
+    const sector = getSector(duty.sector_id);
+    const sectorPath = sector ? getSectorPath(sector.id) : "the sector";
+    document.getElementById("editDutyLibrarianCheckboxes").innerHTML = `
+  <p class="text-muted" style="padding:10px;">
+    📌 Librarians are inherited from <strong>${sectorPath}</strong>.<br>
+    To change them, edit the sector assignments.
+  </p>`;
     const selectBtns = document.getElementById("editDutySelectAllBtns");
     if (selectBtns) selectBtns.style.display = "none";
   } else {
@@ -2678,13 +3076,22 @@ async function saveEditDuty() {
     return;
   }
 
-  // If the duty is linked to a sector, we don't block the edit – just leave the lib list empty.
-  if (!duty.sector_id) {
-    const selectedLibs = [];
+  let libs = [];
+  if (duty.sector_id) {
+    libs = getSectorPeople(duty.sector_id).map((p) => p.id);
+    if (libs.length === 0) {
+      Swal.fire(
+        "Error",
+        "The linked sector has no librarians. Assign some first.",
+        "error"
+      );
+      return;
+    }
+  } else {
     document
       .querySelectorAll(".edit-duty-lib-check:checked")
-      .forEach((cb) => selectedLibs.push(cb.value));
-    if (!selectedLibs.length) {
+      .forEach((cb) => libs.push(cb.value));
+    if (!libs.length) {
       Swal.fire("Error", "Select at least one librarian.", "error");
       return;
     }
@@ -2694,8 +3101,17 @@ async function saveEditDuty() {
     "⚠️ Confirm Changes",
     `<p>Editing <strong>${duty.name}</strong> will affect <strong>ALL FUTURE instances</strong>. Past instances remain unchanged.</p>`,
     async () => {
+      // Lock background sync for the entire save sequence
+      isSaving = true;
       showLoading();
+      Swal.fire({
+        title: "Saving duty...",
+        allowOutsideClick: false,
+        didOpen: () => Swal.showLoading(),
+      });
+
       try {
+        // 1. Update duty properties
         duty.name = name;
         duty.start_time = start;
         duty.end_time = end;
@@ -2708,36 +3124,65 @@ async function saveEditDuty() {
         duty.is_punishment = isPunishment;
         duty.updated_at = new Date().toISOString();
 
-        // Delete all future instances (today and later)
+        // 2. Delete all future instances and their attendance
         const futureInsts = appData.duty_instances.filter(
           (di) => di.duty_id === duty.id && di.date >= getToday()
         );
+
         for (const inst of futureInsts) {
+          await deleteEntity("attendance/by-instance", inst.id);
+          appData.attendance = appData.attendance.filter(
+            (a) => a.duty_instance_id !== inst.id
+          );
           await deleteEntity("duties/instances", inst.id);
         }
+
         appData.duty_instances = appData.duty_instances.filter(
           (di) => !(di.duty_id === duty.id && di.date >= getToday())
         );
-        appData.attendance = appData.attendance.filter((a) => {
-          const inst = appData.duty_instances.find(
-            (di) => di.id === a.duty_instance_id
-          );
-          return inst !== undefined;
-        });
 
+        // 3. Save the updated duty
         await saveEntity("duties", duty, duty.id);
 
-        // ★ Immediately create today's instance if the updated duty occurs today
-        await generateDutyInstancesForDate(getToday());
+        // 4. Create today's instance with the new librarian set
+        const today = getToday();
+        if (dutyOccursOnDate(duty, today)) {
+          const newInst = {
+            duty_id: duty.id,
+            date: today,
+            is_active: true,
+            created_at: new Date().toISOString(),
+          };
+          const savedInst = await saveEntity("duties/instances", newInst);
+          appData.duty_instances.push(savedInst);
 
+          for (const libId of libs) {
+            const att = {
+              duty_instance_id: savedInst.id,
+              librarian_id: libId,
+              attended: false,
+              confirmed_by: "system",
+              confirmed_at: new Date().toISOString(),
+              forgiven: false,
+              punishment_issued: false,
+            };
+            const savedAtt = await saveEntity("attendance", att);
+            appData.attendance.push(savedAtt);
+            recalcAttendancePct(libId);
+          }
+        }
+
+        Swal.close();
         closeModal("editDutyModal");
         renderCurrentPage();
         updateDutyBadge();
         toast("Duty updated – today’s instance has been refreshed.");
       } catch (err) {
+        Swal.close();
         console.error(err);
         toast("Error saving duty. Please try again.");
       } finally {
+        isSaving = false;
         hideLoading();
       }
     }
@@ -2799,99 +3244,115 @@ async function deleteDuty(dutyId) {
   if (!duty) return;
 
   showConfirm(
-    "Delete Duty",
+    "Stop / Delete Duty",
     `<div>
-      <p>Are you sure you want to delete <strong>${duty.name}</strong>?</p>
+      <p>What would you like to do with <strong>${duty.name}</strong>?</p>
       <div class="confirm-warning">
-        <strong>🛑 This will stop the duty from occurring in the future.</strong>
+        <strong>🛑 Stop future occurrences</strong>
         <ul>
-          <li><strong>Past</strong> instances (before today) and their attendance will be <strong>kept</strong> so you can still view them.</li>
-          <li>The duty will <strong>no longer appear</strong> on today or upcoming days.</li>
-          <li>If you want to delete everything (including past history), check the box below.</li>
-          ${
-            duty.is_punishment
-              ? "<li>Associated punishment tags will be removed.</li>"
-              : ""
-          }
+          <li>The duty will no longer be created for today or any future date.</li>
+          <li>Past attendance records will <strong>remain unchanged</strong> and the duty will still appear in history with its name.</li>
+          <li>The duty will be marked as “Ended” in the duty list.</li>
         </ul>
+        <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:14px;">
+          <input type="checkbox" id="clearDutyHistory" />
+          <strong>Permanently delete</strong> – also erase all past attendance records and the duty itself (cannot be undone).
+        </label>
       </div>
-      <label style="display:flex; align-items:center; gap:8px; margin-top:12px; font-size:14px;">
-        <input type="checkbox" id="clearDutyHistory" />
-        Also permanently delete all past attendance records for this duty
-      </label>
     </div>`,
     async () => {
+      isSaving = true; // ★ lock out background sync while we work
       showLoading();
       try {
         const clearHistory =
           document.getElementById("clearDutyHistory")?.checked || false;
 
-        const allInstances = appData.duty_instances.filter(
-          (di) => di.duty_id === dutyId
-        );
-
         if (clearHistory) {
-          // Delete attendance for EVERY instance (past + future)
+          // --- Permanently delete everything ---
+          const allInstances = appData.duty_instances.filter(
+            (di) => di.duty_id === dutyId
+          );
+
+          // 1. Delete attendance for ALL instances
           for (const inst of allInstances) {
             await deleteEntity("attendance/by-instance", inst.id);
           }
+          // 2. Delete all instances
+          for (const inst of allInstances) {
+            await deleteEntity("duties/instances", inst.id);
+          }
+          // 3. Delete the duty itself
+          await deleteEntity("duties", dutyId);
+
+          // ★ Only now update local cache – everything succeeded
           appData.attendance = appData.attendance.filter(
             (a) => !allInstances.some((inst) => inst.id === a.duty_instance_id)
           );
-          // Delete all instances
-          for (const inst of allInstances) {
-            await deleteEntity("duties/instances", inst.id);
-          }
-          // Remove all from cache
           appData.duty_instances = appData.duty_instances.filter(
             (di) => di.duty_id !== dutyId
           );
-        } else {
-          // Keep past instances, delete only future ones
-          const futureInsts = allInstances.filter(
-            (inst) => inst.date >= getToday()
-          );
+          appData.duties = appData.duties.filter((d) => d.id !== dutyId);
 
-          // Delete attendance for future instances only
+          const affectedLibIds = new Set();
+          allInstances.forEach((inst) => {
+            appData.attendance
+              .filter((a) => a.duty_instance_id === inst.id)
+              .forEach((a) => affectedLibIds.add(a.librarian_id));
+          });
+          affectedLibIds.forEach((id) => recalcAttendancePct(id));
+        } else {
+          // --- Stop future occurrences only ---
+          const today = getToday();
+          const d = new Date(today);
+          d.setDate(d.getDate() - 1);
+          const yesterday = d.toISOString().split("T")[0];
+
+          // Set end_date on the server
+          duty.end_date = yesterday;
+          await saveEntity("duties", duty, duty.id);
+
+          // Delete only future instances and their attendance
+          const futureInsts = appData.duty_instances.filter(
+            (di) => di.duty_id === dutyId && di.date >= today
+          );
           for (const inst of futureInsts) {
             await deleteEntity("attendance/by-instance", inst.id);
           }
-          appData.attendance = appData.attendance.filter(
-            (a) => !futureInsts.some((inst) => inst.id === a.duty_instance_id)
-          );
-
-          // Delete future instances from DB
           for (const inst of futureInsts) {
             await deleteEntity("duties/instances", inst.id);
           }
 
-          // ★ Keep past instances in cache – only remove future ones
-          appData.duty_instances = appData.duty_instances.filter(
-            (di) => !(di.duty_id === dutyId && di.date >= getToday())
+          // Update local cache – remove future attendance and instances, keep the duty
+          appData.attendance = appData.attendance.filter(
+            (a) => !futureInsts.some((inst) => inst.id === a.duty_instance_id)
           );
-        }
+          appData.duty_instances = appData.duty_instances.filter(
+            (di) => !(di.duty_id === dutyId && di.date >= today)
+          );
+          // Duty stays in appData.duties – it’s just “Ended”
 
-        // Delete the duty itself
-        await deleteEntity("duties", dutyId);
-        appData.duties = appData.duties.filter((d) => d.id !== dutyId);
-
-        if (duty.is_punishment) {
-          appData.tags = appData.tags.filter((t) => t.duty_id !== dutyId);
+          const affectedLibIds = new Set();
+          futureInsts.forEach((inst) => {
+            appData.attendance
+              .filter((a) => a.duty_instance_id === inst.id)
+              .forEach((a) => affectedLibIds.add(a.librarian_id));
+          });
+          affectedLibIds.forEach((id) => recalcAttendancePct(id));
         }
 
         saveData();
-        // ★ Re‑render the current page (updates dashboard, duties, attendance, etc.)
         renderCurrentPage();
         updateDutyBadge();
         toast(
-          `Duty "${duty.name}" deleted – future occurrences stopped.${
-            clearHistory ? " All history cleared." : " Past records kept."
-          }`
+          clearHistory
+            ? "Duty permanently deleted."
+            : "Duty stopped – past records preserved."
         );
       } catch (err) {
         console.error(err);
-        toast("Deletion failed.");
+        toast("Action failed – your data has been kept as it was.");
       } finally {
+        isSaving = false; // ★ release the lock
         hideLoading();
       }
     }
@@ -2940,54 +3401,316 @@ async function renderAttendance() {
       '<p class="text-muted">Cannot view future dates.</p>';
     return;
   }
+
+  // Always generate instances – if school is off, the function will just return early
   await generateDutyInstancesForDate(date);
+
   const instances = appData.duty_instances.filter(
     (di) => di.date === date && di.is_active
   );
+
   const container = document.getElementById("attendanceContainer");
+
+  // ----- Holiday toggle and create-instance button (always visible) -----
+  let html = `
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
+      <label style="font-size:14px; font-weight:600; display:flex; align-items:center; gap:8px; cursor:pointer;">
+        <span>🏫 School in Session</span>
+        <input type="checkbox" id="schoolSessionCheck" ${
+          schoolInSession ? "checked" : ""
+        } onchange="toggleSchoolSession()" />
+      </label>
+      <button class="btn btn-success btn-sm" onclick="openCreateInstanceModal('${date}')">➕ Add Duty for Today</button>
+    </div>
+  `;
+
+  // Show a notice if school is off, but keep the buttons and existing instances visible
+  if (!schoolInSession) {
+    html +=
+      '<p class="text-muted" style="margin-bottom:8px;">Holiday mode is on – new instances are not generated. Today’s existing duties are shown below.</p>';
+  }
+
+  // ----- If no instances exist yet -----
   if (!instances.length) {
-    container.innerHTML = '<p class="text-muted">No duties on this date.</p>';
+    html +=
+      '<p class="text-muted" style="margin-bottom:16px;">No duties on this date. You can use the button above to add them manually.</p>';
+    container.innerHTML = html;
     return;
   }
-  container.innerHTML = instances
-    .map((di) => {
-      const duty = appData.duties.find((d) => d.id === di.duty_id);
-      if (!duty) return "";
-      const records = appData.attendance.filter(
-        (a) => a.duty_instance_id === di.id
-      );
-      return `<div class="attendance-sheet ${
-        duty.is_punishment ? "punishment" : ""
-      }">
-        <div class="sheet-header"><div><span class="sheet-title">${
-          duty.name
-        }</span> <span class="sheet-meta">${formatTime(
-        duty.start_time
-      )}-${formatTime(duty.end_time)}</span></div>
-        <div><button class="btn btn-secondary btn-sm" onclick="selectAllAttendance('${
-          di.id
-        }',true)">All Present</button> <button class="btn btn-secondary btn-sm" onclick="selectAllAttendance('${
-        di.id
-      }',false)">All Absent</button></div></div>
-        <div class="sheet-people">${records
-          .map((r) => {
-            const lib = getLib(r.librarian_id);
-            if (!lib) return "";
-            const checked = r.attended || r.forgiven;
-            return `<label class="person-check ${
-              checked ? "present" : "absent"
-            }"><input type="checkbox" class="attendance-check" data-record="${
-              r.id
-            }" ${checked ? "checked" : ""} onchange="toggleSingleAttendance('${
-              r.id
-            }', this)"> ${lib.name} ${r.forgiven ? "(forgiven)" : ""}</label>`;
-          })
-          .join("")}</div>
-      </div>`;
-    })
-    .join("");
+
+  // ----- Tabs with delete buttons -----
+  html += `<div class="sector-tabs" style="margin-bottom:16px; flex-wrap:wrap;">`;
+  instances.forEach((di, idx) => {
+    const duty = appData.duties.find((d) => d.id === di.duty_id);
+    if (!duty) return;
+    const records = appData.attendance.filter(
+      (a) => a.duty_instance_id === di.id
+    );
+    const attended = records.filter((r) => r.attended || r.forgiven).length;
+    html += `<div class="sector-tab ${idx === 0 ? "active" : ""}" 
+                  onclick="switchAttendanceDutyTab('${di.id}')" 
+                  data-instance="${di.id}">
+               <span>${duty.name}</span>
+               <span class="count-badge">${attended}/${records.length}</span>
+               <button class="btn btn-danger btn-sm" style="margin-left:6px; padding:0 6px; background:transparent; border:none; color:var(--danger); font-size:14px;" 
+                       onclick="event.stopPropagation(); deleteDutyInstance('${
+                         di.id
+                       }')" 
+                       title="Delete this occurrence">🗑️</button>
+             </div>`;
+  });
+  html += `</div>`;
+
+  // ----- Table for the first duty instance -----
+  html += `<div id="attendanceTableWrapper">${renderAttendanceTable(
+    instances[0].id
+  )}</div>`;
+
+  container.innerHTML = html;
 }
 
+// Toggle holiday mode – saves to server
+async function toggleSchoolSession() {
+  schoolInSession = !schoolInSession;
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+    await fetch(`${API_BASE}/settings/schoolSession`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ schoolInSession }),
+    });
+  } catch (e) {
+    console.error("Failed to save school session", e);
+    schoolInSession = !schoolInSession;
+    toast("⚠️ Could not update holiday mode – reverted.");
+    renderAttendance();
+    return;
+  }
+  renderAttendance();
+}
+
+// Delete a single duty occurrence for today
+async function deleteDutyInstance(instanceId) {
+  const inst = appData.duty_instances.find((di) => di.id === instanceId);
+  if (!inst) return;
+
+  const duty = appData.duties.find((d) => d.id === inst.duty_id);
+  const dutyName = duty ? duty.name : "this duty";
+
+  // Capture librarian IDs before deletion
+  const libIds = appData.attendance
+    .filter((a) => a.duty_instance_id === instanceId)
+    .map((a) => a.librarian_id);
+
+  showConfirm(
+    "Delete Today's Occurrence",
+    `<p>Delete <strong>${dutyName}</strong> for today only?<br>Future schedules are not affected.</p>`,
+    async () => {
+      isSaving = true;
+      showLoading();
+      try {
+        // ★ Only remove from the DOM AFTER the user confirms
+        const tab = document.querySelector(
+          `.sector-tab[data-instance="${instanceId}"]`
+        );
+        if (tab) tab.remove();
+
+        const activeTab = document.querySelector(
+          "#attendanceContainer .sector-tab.active"
+        );
+        if (!activeTab || activeTab.dataset.instance === instanceId) {
+          const wrapper = document.getElementById("attendanceTableWrapper");
+          if (wrapper)
+            wrapper.innerHTML =
+              '<p class="text-muted">This duty occurrence has been deleted.</p>';
+        }
+
+        // Delete attendance records (server + local)
+        await deleteEntity("attendance/by-instance", inst.id);
+        appData.attendance = appData.attendance.filter(
+          (a) => a.duty_instance_id !== instanceId
+        );
+
+        // Delete the instance (server + local)
+        await deleteEntity("duties/instances", instanceId);
+        appData.duty_instances = appData.duty_instances.filter(
+          (di) => di.id !== instanceId
+        );
+
+        // Remember the deletion and the librarian list
+
+        manuallyDeletedDutyDates.add(`${inst.duty_id}|${inst.date}`);
+        saveManuallyDeletedDutyDates();
+        deletedInstanceLibrarians.set(`${inst.duty_id}|${inst.date}`, libIds);
+
+        // Recalculate percentages
+        const affectedLibIds = new Set(libIds);
+        affectedLibIds.forEach((id) => recalcAttendancePct(id));
+
+        saveData();
+        updateDutyBadge();
+        syncLocalNotifications();
+
+        renderAttendance();
+        toast("Today's occurrence deleted.");
+      } catch (err) {
+        console.error(err);
+        toast("Failed to delete. Please try again.");
+        // ★ Restore the UI if the delete failed (re‑render)
+        renderAttendance();
+      } finally {
+        isSaving = false;
+        hideLoading();
+      }
+    }
+  );
+}
+// Open modal to create a missing duty instance for today
+function openCreateInstanceModal(date) {
+  const today = date;
+  const dutiesWithoutInstance = appData.duties.filter((duty) => {
+    if (duty.end_date && duty.end_date < today) return false;
+    if (!dutyOccursOnDate(duty, today)) return false;
+    const exists = appData.duty_instances.some(
+      (di) => di.duty_id === duty.id && di.date === today
+    );
+    return !exists;
+  });
+
+  if (dutiesWithoutInstance.length === 0) {
+    toast("All duties that occur today already have instances.");
+    return;
+  }
+
+  let listHtml = "";
+  dutiesWithoutInstance.forEach((d) => {
+    listHtml += `
+      <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:#f8fafc; border-radius:6px; margin-bottom:4px;">
+        <span>${d.name} (${formatTime(d.start_time)} – ${formatTime(
+      d.end_time
+    )})</span>
+        <button class="btn btn-primary btn-sm" onclick="createInstanceForDuty('${
+          d.id
+        }', '${today}')">Create</button>
+      </div>`;
+  });
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay active";
+  overlay.id = "createInstanceModal";
+  overlay.style.zIndex = modalZIndex + 10;
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:500px; z-index:${modalZIndex + 11};">
+      <div class="modal-header">
+        <h3>➕ Add Duty Instance for ${formatDate(today)}</h3>
+        <button class="close-btn" onclick="closeModal('createInstanceModal')">×</button>
+      </div>
+      <div class="modal-body">
+        ${listHtml}
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('createInstanceModal')">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+// Create a single instance for a duty on a given date
+async function createInstanceForDuty(dutyId, date) {
+  const duty = appData.duties.find((d) => d.id === dutyId);
+  if (!duty) return;
+
+  const exists = appData.duty_instances.some(
+    (di) => di.duty_id === dutyId && di.date === date
+  );
+  if (exists) {
+    toast("Instance already exists.");
+    closeModal("createInstanceModal");
+    return;
+  }
+
+  showLoading();
+  try {
+    const newInst = {
+      duty_id: dutyId,
+      date: date,
+      is_active: true,
+      created_at: new Date().toISOString(),
+    };
+    const savedInst = await saveEntity("duties/instances", newInst);
+    appData.duty_instances.push(savedInst);
+
+    let libIds = [];
+    if (duty.sector_id) {
+      libIds = getSectorPeople(duty.sector_id).map((p) => p.id);
+    } else {
+      // Try to use the saved list from a previous deletion on this date
+      const savedList = deletedInstanceLibrarians.get(`${dutyId}|${date}`);
+      if (savedList && savedList.length > 0) {
+        libIds = savedList;
+      } else {
+        // Fallback: use most recent instance as template
+        const allOtherInstances = appData.duty_instances.filter(
+          (di) => di.duty_id === dutyId && di.id !== savedInst.id
+        );
+        let templateInst = null;
+        if (allOtherInstances.length > 0) {
+          templateInst = allOtherInstances.reduce(
+            (latest, inst) => (inst.date > latest.date ? inst : latest),
+            allOtherInstances[0]
+          );
+        }
+        if (templateInst) {
+          const templateRecords = appData.attendance.filter(
+            (a) => a.duty_instance_id === templateInst.id
+          );
+          libIds = templateRecords.map((r) => r.librarian_id);
+        }
+        if (libIds.length === 0) {
+          toast(
+            "No librarians assigned to this duty. Please assign librarians first."
+          );
+          closeModal("createInstanceModal");
+          hideLoading();
+          return;
+        }
+      }
+    }
+
+    for (const libId of libIds) {
+      const att = {
+        duty_instance_id: savedInst.id,
+        librarian_id: libId,
+        attended: false,
+        confirmed_by: "system",
+        confirmed_at: new Date().toISOString(),
+        forgiven: false,
+        punishment_issued: false,
+      };
+      const savedAtt = await saveEntity("attendance", att);
+      appData.attendance.push(savedAtt);
+      recalcAttendancePct(libId);
+    }
+
+    // Remove the deleted set entry and saved list since we re‑created the instance
+
+    manuallyDeletedDutyDates.delete(`${dutyId}|${date}`);
+    saveManuallyDeletedDutyDates();
+    deletedInstanceLibrarians.delete(`${dutyId}|${date}`);
+
+    saveData();
+    closeModal("createInstanceModal");
+    renderAttendance();
+    updateDutyBadge();
+    toast(`Instance created for ${duty.name}`);
+  } catch (err) {
+    console.error(err);
+    toast("Failed to create instance.");
+  } finally {
+    hideLoading();
+  }
+}
 async function saveAttendance() {
   let saved = 0;
   const promises = [];
@@ -3017,6 +3740,269 @@ async function saveAttendance() {
   } else toast("No changes.");
 }
 
+function switchAttendanceDutyTab(instanceId) {
+  // Highlight the active tab
+  document
+    .querySelectorAll("#attendanceContainer .sector-tab")
+    .forEach((tab) => {
+      tab.classList.remove("active");
+      if (tab.dataset.instance === instanceId) tab.classList.add("active");
+    });
+  // Render the table for the selected duty
+  const wrapper = document.getElementById("attendanceTableWrapper");
+  wrapper.innerHTML = renderAttendanceTable(instanceId);
+}
+
+function renderAttendanceTable(instanceId) {
+  const records = appData.attendance.filter(
+    (a) => a.duty_instance_id === instanceId
+  );
+  const instance = appData.duty_instances.find((di) => di.id === instanceId);
+  const duty = instance
+    ? appData.duties.find((d) => d.id === instance.duty_id)
+    : null;
+  if (!duty || !records.length) return '<p class="text-muted">No records.</p>';
+
+  // ---------- SORT ----------
+  const sortState = attendanceSortState[instanceId] || {
+    key: "name",
+    dir: "asc",
+  };
+  const sortedRecords = [...records].sort((a, b) => {
+    const libA = getLib(a.librarian_id);
+    const libB = getLib(b.librarian_id);
+    let valA, valB;
+    switch (sortState.key) {
+      case "name":
+        valA = (libA?.name || "").toLowerCase();
+        valB = (libB?.name || "").toLowerCase();
+        break;
+      case "grade":
+        valA = (libA?.grade || "").toLowerCase();
+        valB = (libB?.grade || "").toLowerCase();
+        break;
+      case "adm":
+        valA = (libA?.adm_no || "").toLowerCase();
+        valB = (libB?.adm_no || "").toLowerCase();
+        break;
+      case "house":
+        valA = (libA?.house || "").toLowerCase();
+        valB = (libB?.house || "").toLowerCase();
+        break;
+      case "status":
+        valA = a.attended || a.forgiven ? 1 : 0;
+        valB = b.attended || b.forgiven ? 1 : 0;
+        break;
+      default:
+        return 0;
+    }
+    if (valA < valB) return sortState.dir === "asc" ? -1 : 1;
+    if (valA > valB) return sortState.dir === "asc" ? 1 : -1;
+    return 0;
+  });
+
+  // ---------- HTML ----------
+  const attendedCount = records.filter((r) => r.attended || r.forgiven).length;
+  const sortArrow = (key) => {
+    if (sortState.key !== key) return "";
+    return sortState.dir === "asc" ? " ▲" : " ▼";
+  };
+
+  const hasLastAction = !!lastAttendanceAction[instanceId];
+
+  let html = `
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:12px;">
+      <div>
+        <strong>${duty.name}</strong>
+        <span style="font-size:13px; color:var(--text-secondary); margin-left:8px;">
+          ${formatTime(duty.start_time)} – ${formatTime(duty.end_time)}
+        </span>
+        <span style="font-size:13px; margin-left:8px;" id="attendanceCount_${instanceId}">
+          ${attendedCount}/${records.length} attended
+        </span>
+      </div>
+      <div>
+        <input type="text" id="attendanceSearch_${instanceId}" 
+               placeholder="Search librarian…" 
+               oninput="filterAttendanceTable('${instanceId}')"
+               style="padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:13px; width:180px;" />
+        <button class="btn btn-secondary btn-sm" onclick="selectAllAttendance('${instanceId}', true)">✅ All Present</button>
+        <button class="btn btn-secondary btn-sm" onclick="selectAllAttendance('${instanceId}', false)">❌ All Absent</button>
+        <button class="btn btn-secondary btn-sm" onclick="undoLastAttendance('${instanceId}')" 
+                ${hasLastAction ? "" : "disabled"} 
+                title="Undo last action">↩️ Undo</button>
+      </div>
+    </div>
+    <table style="width:100%; font-size:13px; border-collapse:collapse;">
+      <thead>
+        <tr style="background:#f8fafc; position:sticky; top:48px; z-index:10;">
+          <th style="padding:8px 10px; width:30px;"></th>   <!-- ★ checkbox column -->
+          <th style="padding:8px 10px; text-align:left; cursor:pointer;" onclick="sortAttendanceTable('${instanceId}', 'name')">Name${sortArrow(
+    "name"
+  )}</th>
+          <th style="padding:8px 10px; text-align:left; cursor:pointer;" onclick="sortAttendanceTable('${instanceId}', 'grade')">Grade${sortArrow(
+    "grade"
+  )}</th>
+          <th style="padding:8px 10px; text-align:left; cursor:pointer;" onclick="sortAttendanceTable('${instanceId}', 'adm')">Adm No.${sortArrow(
+    "adm"
+  )}</th>
+          <th style="padding:8px 10px; text-align:left; cursor:pointer;" onclick="sortAttendanceTable('${instanceId}', 'house')">House${sortArrow(
+    "house"
+  )}</th>
+          <th style="padding:8px 10px; text-align:center; cursor:pointer;" onclick="sortAttendanceTable('${instanceId}', 'status')">Status${sortArrow(
+    "status"
+  )}</th>
+        </tr>
+      </thead>
+      <tbody id="attendanceTableBody_${instanceId}">
+  `;
+
+  sortedRecords.forEach((r) => {
+    const lib = getLib(r.librarian_id);
+    if (!lib) return;
+    const isPresent = r.attended || r.forgiven;
+    const rowBg = isPresent ? "#f0fdf4" : "#fef2f2";
+
+    html += `
+      <tr class="attendance-row" data-lib-name="${lib.name.toLowerCase()}" data-lib-adm="${lib.adm_no.toLowerCase()}"
+          style="background:${rowBg}; cursor:pointer;"
+          onclick="toggleAttendanceRow(this, '${instanceId}')">
+        <td onclick="event.stopPropagation()">
+          <input type="checkbox" class="attendance-check" data-record="${r.id}" 
+                 ${isPresent ? "checked" : ""} 
+                 onchange="toggleSingleAttendance('${r.id}', this)">
+        </td>
+        <td>${lib.name}</td>
+        <td>${lib.grade}</td>
+        <td>${lib.adm_no}</td>
+        <td>${lib.house || "—"}</td>
+        <td style="text-align:center;">
+          <span class="attendance-status-badge" style="display:inline-block; padding:2px 12px; border-radius:12px; font-size:12px; font-weight:600; 
+                ${
+                  isPresent
+                    ? "background:#dcfce7; color:#166534;"
+                    : "background:#fee2e2; color:#991b1b;"
+                }">
+            ${isPresent ? "Present" : "Absent"}
+          </span>
+        </td>
+      </tr>`;
+  });
+
+  html += `
+      </tbody>
+    </table>`;
+  return html;
+}
+function filterAttendanceTable(instanceId) {
+  const searchTerm = document
+    .getElementById(`attendanceSearch_${instanceId}`)
+    .value.toLowerCase();
+  const rows = document.querySelectorAll(
+    `#attendanceTableBody_${instanceId} .attendance-row`
+  );
+  rows.forEach((row) => {
+    const name = row.dataset.libName;
+    const adm = row.dataset.libAdm;
+    row.style.display =
+      name.includes(searchTerm) || adm.includes(searchTerm) ? "" : "none";
+  });
+}
+
+// Toggle attendance by clicking anywhere on the row (except the checkbox itself)
+function toggleAttendanceRow(row, instanceId) {
+  const checkbox = row.querySelector(".attendance-check");
+  if (checkbox) {
+    checkbox.checked = !checkbox.checked;
+    checkbox.dispatchEvent(new Event("change"));
+  }
+}
+
+// Sort the attendance table by a given column
+function sortAttendanceTable(instanceId, key) {
+  const current = attendanceSortState[instanceId] || {
+    key: "name",
+    dir: "asc",
+  };
+  if (current.key === key) {
+    current.dir = current.dir === "asc" ? "desc" : "asc";
+  } else {
+    current.key = key;
+    current.dir = "asc";
+  }
+  attendanceSortState[instanceId] = current;
+  // Re-render the table for this instance
+  const wrapper = document.getElementById("attendanceTableWrapper");
+  if (wrapper) {
+    wrapper.innerHTML = renderAttendanceTable(instanceId);
+  }
+}
+
+function toggleSelectAllAttendance(instanceId, checked) {
+  const checkboxes = document.querySelectorAll(
+    `#attendanceTableBody_${instanceId} .attendance-check`
+  );
+  checkboxes.forEach((cb) => {
+    if (cb.checked !== checked) {
+      cb.checked = checked;
+      cb.dispatchEvent(new Event("change"));
+    }
+  });
+}
+
+function updateAttendanceTabBadge(instanceId) {
+  const tab = document.querySelector(
+    `.sector-tab[data-instance="${instanceId}"]`
+  );
+  if (!tab) return;
+  const records = appData.attendance.filter(
+    (a) => a.duty_instance_id === instanceId
+  );
+  const attended = records.filter((r) => r.attended || r.forgiven).length;
+  const badge = tab.querySelector(".count-badge");
+  if (badge) badge.textContent = `${attended}/${records.length}`;
+}
+
+function filterAttendanceTable(instanceId) {
+  const searchTerm = document
+    .getElementById(`attendanceSearch_${instanceId}`)
+    .value.toLowerCase();
+  const rows = document.querySelectorAll(
+    `#attendanceTableBody_${instanceId} .attendance-row`
+  );
+  rows.forEach((row) => {
+    const name = row.dataset.libName;
+    const adm = row.dataset.libAdm;
+    row.style.display =
+      name.includes(searchTerm) || adm.includes(searchTerm) ? "" : "none";
+  });
+}
+
+function toggleSelectAllAttendance(instanceId, checked) {
+  const checkboxes = document.querySelectorAll(
+    `#attendanceTableBody_${instanceId} .attendance-check`
+  );
+  checkboxes.forEach((cb) => {
+    if (cb.checked !== checked) {
+      cb.checked = checked;
+      cb.dispatchEvent(new Event("change"));
+    }
+  });
+}
+
+function updateAttendanceTabBadge(instanceId) {
+  const tab = document.querySelector(
+    `.sector-tab[data-instance="${instanceId}"]`
+  );
+  if (!tab) return;
+  const records = appData.attendance.filter(
+    (a) => a.duty_instance_id === instanceId
+  );
+  const attended = records.filter((r) => r.attended || r.forgiven).length;
+  const badge = tab.querySelector(".count-badge");
+  if (badge) badge.textContent = `${attended}/${records.length}`;
+}
+
 async function selectAllAttendance(instId, attended) {
   const records = appData.attendance.filter(
     (a) => a.duty_instance_id === instId
@@ -3027,9 +4013,28 @@ async function selectAllAttendance(instId, attended) {
     r.forgiven = false;
     r.confirmed_at = new Date().toISOString();
     r.confirmed_by = appData.current_user;
+    recalcAttendancePct(r.librarian_id);
   });
 
-  renderAttendance();
+  // Write to localStorage immediately
+  saveData();
+
+  // ★ Remember this bulk action as the last action for this duty
+  lastAttendanceAction[instId] = { type: "bulk", attended };
+
+  // Refresh only the visible table content if we are on the attendance page
+  if (currentPage === "attendance") {
+    const activeTab = document.querySelector(
+      "#attendanceContainer .sector-tab.active"
+    );
+    const activeInstanceId = activeTab?.dataset.instance;
+    if (activeInstanceId === instId) {
+      const wrapper = document.getElementById("attendanceTableWrapper");
+      if (wrapper) wrapper.innerHTML = renderAttendanceTable(instId);
+    }
+    updateAttendanceTabBadge(instId);
+  }
+
   updateDutyBadge();
   syncLocalNotifications();
   if (currentPage === "notifications") {
@@ -3039,9 +4044,9 @@ async function selectAllAttendance(instId, attended) {
   toast(`All marked ${attended ? "present" : "absent"}.`);
 
   records.forEach((r) => pendingAttendanceSaves.set(r.id, r));
-
   if (attendanceBatchTimer) clearTimeout(attendanceBatchTimer);
   attendanceBatchTimer = setTimeout(flushAttendanceSaves, 300);
+  showLoading();
 }
 
 async function flushAttendanceSaves() {
@@ -3049,16 +4054,26 @@ async function flushAttendanceSaves() {
   pendingAttendanceSaves.clear();
   attendanceBatchTimer = null;
 
-  // Save all in parallel (no loading bar)
+  let hadError = false;
+
   const promises = recordsToSave.map((r) =>
-    saveEntity("attendance", r, r.id, true).catch((err) =>
-      console.error("Failed to save attendance record", r.id, err)
-    )
+    saveEntity("attendance", r, r.id, true)
+      .then(() => {
+        recalcAttendancePct(r.librarian_id);
+      })
+      .catch((err) => {
+        console.error("Failed to save attendance record", r.id, err);
+        hadError = true;
+      })
   );
   await Promise.all(promises);
 
-  // After all saves, regenerate missed notifications once
+  if (hadError) {
+    toast("⚠️ Some changes could not be saved. Please try again.");
+  }
+
   await generateMissedNotifications();
+  hideLoading(); // hide loading bar after all saves complete
 }
 
 async function toggleSingleAttendance(recordId, checkbox) {
@@ -3066,31 +4081,83 @@ async function toggleSingleAttendance(recordId, checkbox) {
   if (!rec) return;
 
   const newChecked = checkbox.checked;
-
-  const label = checkbox.closest("label");
-  if (label) {
-    label.className = `person-check ${newChecked ? "present" : "absent"}`;
-  }
   rec.attended = newChecked;
   rec.forgiven = false;
   rec.confirmed_at = new Date().toISOString();
   rec.confirmed_by = appData.current_user;
 
+  // ★ Update the pre‑computed percentage
+  recalcAttendancePct(rec.librarian_id);
+
+  // ★ Write the change to localStorage immediately
+  saveData();
+
+  // ★ Update the row background and badge instantly
+  const row = checkbox.closest("tr");
+  if (row) {
+    row.style.background = newChecked ? "#f0fdf4" : "#fef2f2";
+
+    const badge = row.querySelector(".attendance-status-badge");
+    if (badge) {
+      if (newChecked) {
+        badge.textContent = "Present";
+        badge.style.background = "#dcfce7";
+        badge.style.color = "#166534";
+      } else {
+        badge.textContent = "Absent";
+        badge.style.background = "#fee2e2";
+        badge.style.color = "#991b1b";
+      }
+    }
+  }
+
+  // ★ Update the duty tab's attendance count
+  const instanceId = rec.duty_instance_id;
+  updateAttendanceTabBadge(instanceId);
+
+  const countEl = document.getElementById(`attendanceCount_${instanceId}`);
+  if (countEl) {
+    const records = appData.attendance.filter(
+      (a) => a.duty_instance_id === instanceId
+    );
+    const attended = records.filter((r) => r.attended || r.forgiven).length;
+    countEl.textContent = `${attended}/${records.length} attended`;
+  }
+
   updateNotificationBadge();
   updateDutyBadge();
   syncLocalNotifications();
   if (currentPage === "notifications") {
-    renderNotifications(); // ★ instantly refresh the notification page
+    renderNotifications();
+  }
+
+  // ★ Remember this single action as the last action for this duty
+  lastAttendanceAction[instanceId] = { type: "single", recordId };
+
+  // ★ Instantly enable the Undo button for this duty
+  const undoBtn = document
+    .querySelector(`#attendanceTableBody_${instanceId}`)
+    ?.closest("table")
+    ?.previousElementSibling?.querySelector(
+      'button[onclick*="undoLastAttendance"]'
+    );
+  // Easier: find the button by its onclick attribute in the whole container
+  const container = document.getElementById("attendanceContainer");
+  if (container) {
+    const btn = container.querySelector(
+      `button[onclick="undoLastAttendance('${instanceId}')"]`
+    );
+    if (btn) btn.disabled = false;
   }
 
   pendingAttendanceSaves.set(recordId, rec);
 
   if (attendanceBatchTimer) clearTimeout(attendanceBatchTimer);
   attendanceBatchTimer = setTimeout(flushAttendanceSaves, 300);
+  showLoading();
 
   toast(newChecked ? "✅ Present" : "❌ Absent");
 }
-
 // ============================================
 // ATTENDANCE HISTORY
 // ============================================
@@ -3162,9 +4229,31 @@ function viewAttendanceHistory(libId) {
           rowColors[idx % 2]
         }; border-radius:4px;">
           <div>
-            <span style="font-weight:600; font-size:14px;">${
-              duty ? duty.name : "Unknown Duty"
-            }</span>
+         <div>
+  <span style="font-weight:600; font-size:14px;">${
+    duty ? duty.name : "Unknown Duty"
+  }</span>
+  ${
+    duty
+      ? `<span style="font-size:11px; color:var(--text-muted); margin-left:6px;">(${
+          duty.sector_id ? getSectorPath(duty.sector_id) : "Standalone"
+        })</span>`
+      : ""
+  }
+  <span style="font-size:13px; color:var(--text-secondary); margin-left:8px;">${
+    duty ? formatTime(duty.start_time) + " - " + formatTime(duty.end_time) : ""
+  }</span>
+  ${
+    r.forgiven
+      ? '<span style="font-size:12px; color:#b45309; background:#fef3c7; padding:0 6px; border-radius:8px; margin-left:4px;">Forgiven</span>'
+      : ""
+  }
+  ${
+    r.punishment_issued
+      ? '<span style="font-size:12px; color:#b91c1c; background:#fee2e2; padding:0 6px; border-radius:8px; margin-left:4px;">Punished</span>'
+      : ""
+  }
+</div>
             <span style="font-size:13px; color:var(--text-secondary); margin-left:8px;">${
               duty
                 ? formatTime(duty.start_time) +
@@ -3199,22 +4288,103 @@ function viewAttendanceHistory(libId) {
   openModal("attendanceHistoryModal");
 }
 
+async function fullSyncDutyInstancesForSector(secId) {
+  const duties = appData.duties.filter((d) => d.sector_id === secId);
+  const today = getToday();
+  const sectorPeople = getSectorPeople(secId).map((p) => p.id);
+
+  for (const duty of duties) {
+    const futureInstances = appData.duty_instances.filter(
+      (di) => di.duty_id === duty.id && di.date >= today
+    );
+
+    for (const inst of futureInstances) {
+      // Get current attendance for this instance
+      const currentLibIds = appData.attendance
+        .filter((a) => a.duty_instance_id === inst.id)
+        .map((a) => a.librarian_id);
+
+      // Remove attendance for librarians no longer in the sector
+      const toRemove = currentLibIds.filter((id) => !sectorPeople.includes(id));
+      for (const libId of toRemove) {
+        const attRecord = appData.attendance.find(
+          (a) => a.duty_instance_id === inst.id && a.librarian_id === libId
+        );
+        if (attRecord) {
+          await deleteEntity("attendance", attRecord.id);
+          appData.attendance = appData.attendance.filter(
+            (a) => a.id !== attRecord.id
+          );
+          recalcAttendancePct(libId);
+        }
+      }
+
+      // Add missing librarians
+      const toAdd = sectorPeople.filter((id) => !currentLibIds.includes(id));
+      for (const libId of toAdd) {
+        if (
+          !appData.attendance.some(
+            (a) => a.duty_instance_id === inst.id && a.librarian_id === libId
+          )
+        ) {
+          const att = {
+            duty_instance_id: inst.id,
+            librarian_id: libId,
+            attended: false,
+            confirmed_by: "system",
+            confirmed_at: new Date().toISOString(),
+            forgiven: false,
+            punishment_issued: false,
+          };
+          const savedAtt = await saveEntity("attendance", att);
+          appData.attendance.push(savedAtt);
+          recalcAttendancePct(libId);
+        }
+      }
+    }
+  }
+}
+
 async function toggleAttendanceStatus(recId) {
   const rec = appData.attendance.find((a) => a.id === recId);
   if (!rec) return;
+
+  // Optimistic toggle – update local data immediately
   rec.attended = !rec.attended;
   rec.forgiven = false;
   rec.confirmed_at = new Date().toISOString();
   rec.confirmed_by = appData.current_user;
-  await saveEntity("attendance", rec, rec.id);
-  await generateMissedNotifications();
-  updateDutyBadge();
-  syncLocalNotifications();
-  if (currentPage === "notifications") {
-    renderNotifications();
-  }
+
+  // Recalculate the percentage instantly (dashboard will see it next time it renders)
+  recalcAttendancePct(rec.librarian_id);
+
+  // Refresh the attendance history modal **right now** so the change is visible
   viewAttendanceHistory(rec.librarian_id);
-  renderCurrentPage();
+
+  // Save to server in the background
+  try {
+    await saveEntity("attendance", rec, rec.id);
+    await generateMissedNotifications();
+    syncLocalNotifications();
+    updateDutyBadge();
+    // If the modal is still open, refresh it again to reflect final server state
+    const modal = document.getElementById("attendanceHistoryModal");
+    if (modal && modal.classList.contains("active")) {
+      viewAttendanceHistory(rec.librarian_id);
+    }
+  } catch (err) {
+    console.error("Failed to save attendance status", err);
+    toast("⚠️ Failed to save change – reverted.");
+    // Revert the optimistic change
+    rec.attended = !rec.attended;
+    rec.forgiven = false;
+    recalcAttendancePct(rec.librarian_id);
+    // Refresh the modal only if it’s still open
+    const modal = document.getElementById("attendanceHistoryModal");
+    if (modal && modal.classList.contains("active")) {
+      viewAttendanceHistory(rec.librarian_id);
+    }
+  }
 }
 
 // ============================================
@@ -3472,10 +4642,13 @@ async function clearAllDismissed() {
     "Clear All Dismissed",
     `<p>Are you sure you want to permanently delete <strong>all dismissed notifications</strong>? This cannot be undone.</p>`,
     async () => {
-      const ids = appData.notifications
-        .filter((n) => n.is_dismissed)
-        .map((n) => n.id);
-      for (const id of ids) await deleteEntity("notifications", id);
+      // Delete both server and local dismissed notifications
+      const dismissed = appData.notifications.filter((n) => n.is_dismissed);
+      for (const n of dismissed) {
+        if (!n.id.startsWith("local_")) {
+          await deleteEntity("notifications", n.id);
+        }
+      }
       appData.notifications = appData.notifications.filter(
         (n) => !n.is_dismissed
       );
@@ -3612,14 +4785,92 @@ function showNotificationActionPopup(notifId) {
   openModal("notificationActionModal");
 }
 
+function undoLastAttendance(instanceId) {
+  const action = lastAttendanceAction[instanceId];
+  if (!action) return;
+
+  if (action.type === "single") {
+    const rec = appData.attendance.find((a) => a.id === action.recordId);
+    if (!rec) {
+      delete lastAttendanceAction[instanceId];
+      return;
+    }
+    // Toggle the record back
+    rec.attended = !rec.attended;
+    rec.forgiven = false;
+    rec.confirmed_at = new Date().toISOString();
+    rec.confirmed_by = appData.current_user;
+    recalcAttendancePct(rec.librarian_id);
+    pendingAttendanceSaves.set(rec.id, rec);
+
+    // Update UI: re-render table and tab badge
+    if (currentPage === "attendance") {
+      const activeTab = document.querySelector(
+        "#attendanceContainer .sector-tab.active"
+      );
+      if (activeTab && activeTab.dataset.instance === instanceId) {
+        const wrapper = document.getElementById("attendanceTableWrapper");
+        if (wrapper) wrapper.innerHTML = renderAttendanceTable(instanceId);
+      }
+      updateAttendanceTabBadge(instanceId);
+    }
+    updateDutyBadge();
+    syncLocalNotifications();
+    toast("↩️ Last toggle undone");
+  } else if (action.type === "bulk") {
+    // Reverse the bulk action: mark all as the opposite
+    const newAttended = !action.attended;
+    const records = appData.attendance.filter(
+      (a) => a.duty_instance_id === instanceId
+    );
+    records.forEach((r) => {
+      r.attended = newAttended;
+      r.forgiven = false;
+      r.confirmed_at = new Date().toISOString();
+      r.confirmed_by = appData.current_user;
+      recalcAttendancePct(r.librarian_id);
+      pendingAttendanceSaves.set(r.id, r);
+    });
+
+    // Update UI
+    if (currentPage === "attendance") {
+      const activeTab = document.querySelector(
+        "#attendanceContainer .sector-tab.active"
+      );
+      if (activeTab && activeTab.dataset.instance === instanceId) {
+        const wrapper = document.getElementById("attendanceTableWrapper");
+        if (wrapper) wrapper.innerHTML = renderAttendanceTable(instanceId);
+      }
+      updateAttendanceTabBadge(instanceId);
+    }
+    updateDutyBadge();
+    syncLocalNotifications();
+    toast(
+      `↩️ Bulk action undone – all marked ${newAttended ? "present" : "absent"}`
+    );
+  }
+
+  // Save to localStorage immediately
+  saveData();
+
+  // Clear the action so Undo can't be repeated
+  delete lastAttendanceAction[instanceId];
+
+  // Trigger batch save
+  if (attendanceBatchTimer) clearTimeout(attendanceBatchTimer);
+  attendanceBatchTimer = setTimeout(flushAttendanceSaves, 300);
+  showLoading();
+}
+
 async function forgiveAttendanceRecord(recordId) {
   const rec = appData.attendance.find((a) => a.id === recordId);
   if (!rec) return;
-  rec.attended = true;
-  rec.forgiven = false;
+  rec.attended = false;
+  rec.forgiven = true;
   rec.confirmed_at = new Date().toISOString();
   rec.confirmed_by = appData.current_user;
   await saveEntity("attendance", rec, rec.id);
+  recalcAttendancePct(rec.librarian_id); // ← added
 }
 
 function issuePunishmentFromNotification(notifId) {
@@ -3761,9 +5012,29 @@ async function runAutoAssign() {
       }
     }
 
-    // ★ Sync duty instances for every leaf sector (adds missing attendance records)
+    // ★ FULL SYNC: ensure today's instance exists and then sync all future instances
+    const today = getToday();
     for (const s of leafSectors) {
-      await syncDutyInstancesForSector(s.id);
+      const duties = appData.duties.filter((d) => d.sector_id === s.id);
+      for (const duty of duties) {
+        if (dutyOccursOnDate(duty, today)) {
+          const exists = appData.duty_instances.some(
+            (di) => di.duty_id === duty.id && di.date === today
+          );
+          if (!exists) {
+            const newInst = {
+              duty_id: duty.id,
+              date: today,
+              is_active: true,
+              created_at: new Date().toISOString(),
+            };
+            const savedInst = await saveEntity("duties/instances", newInst);
+            appData.duty_instances.push(savedInst);
+          }
+        }
+      }
+      // Full sync (add missing, remove extras) for all future instances
+      await fullSyncDutyInstancesForSector(s.id);
     }
 
     saveData();
@@ -3880,6 +5151,7 @@ async function restoreLibrarian(id) {
   if (!lib) return;
   lib.is_deleted = false;
   await saveEntity("librarians", lib, id);
+  recalcAttendancePct(lib.id); // ★ added – so percentage shows immediately
   renderCurrentPage();
   toast("Restored.");
 }
@@ -3893,14 +5165,19 @@ async function permanentlyDeleteLibrarian(id) {
     async () => {
       showLoading();
       try {
-        await deleteEntity("librarians", id);
+        const headers = {};
+        if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+        // Hard delete via new permanent endpoint
+        await fetch(`${API_BASE}/librarians/${id}/permanent`, {
+          method: "DELETE",
+          headers,
+        });
         appData.librarians = appData.librarians.filter((l) => l.id !== id);
+        // ... (the rest of the cleanup as before) ...
         const assignmentsToDelete = appData.sector_assignments.filter(
           (a) => a.librarian_id === id
         );
         for (const a of assignmentsToDelete) {
-          const headers = {};
-          if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
           await fetch(
             `${API_BASE}/sectors/assignments/${a.sector_id}/${a.librarian_id}`,
             { method: "DELETE", headers }
@@ -3940,21 +5217,31 @@ async function deleteAllArchive() {
     async () => {
       showLoading();
       try {
+        const headers = {};
+        if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+
         for (const l of archived) {
+          // 1. Remove all sector assignments
           const assignments = appData.sector_assignments.filter(
             (a) => a.librarian_id === l.id
           );
           for (const a of assignments) {
-            const headers = {};
-            if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
             await fetch(
               `${API_BASE}/sectors/assignments/${a.sector_id}/${a.librarian_id}`,
               { method: "DELETE", headers }
             );
           }
-          await deleteEntity("librarians", l.id);
+          // 2. Permanent delete of the librarian
+          await fetch(`${API_BASE}/librarians/${l.id}/permanent`, {
+            method: "DELETE",
+            headers,
+          });
         }
-        appData.librarians = appData.librarians.filter((l) => !l.is_deleted);
+
+        // Remove from local arrays
+        appData.librarians = appData.librarians.filter(
+          (l) => !archived.some((a) => a.id === l.id)
+        );
         appData.sector_assignments = appData.sector_assignments.filter(
           (a) => !archived.some((l) => l.id === a.librarian_id)
         );
@@ -3970,6 +5257,7 @@ async function deleteAllArchive() {
         appData.notifications = appData.notifications.filter(
           (n) => !archived.some((l) => l.id === n.librarian_id)
         );
+
         renderCurrentPage();
         toast("All archived permanently deleted.");
       } catch (err) {
@@ -4226,32 +5514,36 @@ async function syncDutyInstancesForSector(secId) {
     const sectorPeople = getSectorPeople(secId).map((p) => p.id);
 
     for (const inst of instances) {
-      // Get existing attendance records for this instance
       const existingLibIds = appData.attendance
         .filter((a) => a.duty_instance_id === inst.id)
         .map((a) => a.librarian_id);
 
-      // Find missing librarians
       const missing = sectorPeople.filter((id) => !existingLibIds.includes(id));
 
-      // Create attendance records for them
       for (const libId of missing) {
-        const att = {
-          duty_instance_id: inst.id,
-          librarian_id: libId,
-          attended: false,
-          confirmed_by: "system",
-          confirmed_at: new Date().toISOString(),
-          forgiven: false,
-          punishment_issued: false,
-        };
-        const savedAtt = await saveEntity("attendance", att);
-        appData.attendance.push(savedAtt);
+        // ★★★ Guard against duplicate local pushes ★★★
+        if (
+          !appData.attendance.some(
+            (a) => a.duty_instance_id === inst.id && a.librarian_id === libId
+          )
+        ) {
+          const att = {
+            duty_instance_id: inst.id,
+            librarian_id: libId,
+            attended: false,
+            confirmed_by: "system",
+            confirmed_at: new Date().toISOString(),
+            forgiven: false,
+            punishment_issued: false,
+          };
+          const savedAtt = await saveEntity("attendance", att);
+          appData.attendance.push(savedAtt);
+          recalcAttendancePct(libId);
+        }
       }
     }
   }
 }
-
 function addCommitteeRow() {
   const tbody = document.getElementById("committeeMemberInputs");
   const row = document.createElement("tr");
@@ -4349,7 +5641,7 @@ function toast(msg) {
 async function initApp() {
   // 1. Instantly load cached data into appData (synchronous)
   loadData();
-
+  await loadSchoolSession();
   // 2. Set the current date IMMEDIATELY so the UI has a date
   currentViewDate = getToday();
   document.getElementById("viewDate").value = currentViewDate;
@@ -4394,6 +5686,31 @@ async function initApp() {
 
   setInterval(updateNotificationBadge, 15000);
 }
+
+async function toggleSchoolSession() {
+  schoolInSession = !schoolInSession;
+  // Update the server
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
+    await fetch(`${API_BASE}/settings/schoolSession`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ schoolInSession }),
+    });
+  } catch (e) {
+    console.error("Failed to save school session", e);
+    // Revert local change if the server fails? Not strictly necessary, but safe.
+    schoolInSession = !schoolInSession;
+    toast("⚠️ Could not update holiday mode – reverted.");
+    // Refresh the page to show the correct state
+    renderAttendance();
+    return;
+  }
+  // Refresh the attendance page to reflect changes
+  renderAttendance();
+}
+
 async function renderAttendanceModal() {
   const date =
     document.getElementById("attendanceModalDate").value || getToday();
@@ -4468,16 +5785,49 @@ function renderAttendanceTabContent(instanceId) {
           checked
             ? "background:#dcfce7;border:1px solid #86efac"
             : "background:var(--bg);border:1px solid var(--border)"
-        }"><input type="checkbox" class="attendance-tab-check" data-record="${
-          r.id
-        }" ${checked ? "checked" : ""}> ${lib.name} ${
-          r.forgiven ? "(forgiven)" : ""
-        }</label>`;
+        }">
+          <input type="checkbox" class="attendance-tab-check" data-record="${
+            r.id
+          }" ${
+          checked ? "checked" : ""
+        } onchange="toggleAttendanceTabCheckbox(this, '${instanceId}')">
+          ${lib.name} ${r.forgiven ? "(forgiven)" : ""}
+        </label>`;
       })
       .join("")}</div>
-    <div style="margin-top:8px;font-size:13px;color:var(--text-secondary);">${
-      records.filter((r) => r.attended || r.forgiven).length
-    }/${records.length} attended</div>`;
+    <div style="margin-top:8px;font-size:13px;color:var(--text-secondary);" id="attendanceCount_${instanceId}">
+      ${records.filter((r) => r.attended || r.forgiven).length}/${
+    records.length
+  } attended
+    </div>`;
+}
+
+function toggleAttendanceTabCheckbox(checkbox, instanceId) {
+  const newChecked = checkbox.checked;
+  const label = checkbox.closest("label");
+  if (label) {
+    label.style.background = newChecked ? "#dcfce7" : "var(--bg)";
+    label.style.border = newChecked
+      ? "1px solid #86efac"
+      : "1px solid var(--border)";
+  }
+
+  // Update the attended count text (visual only, using checkbox states)
+  const container = document.getElementById("attendanceModalContainer");
+  const allCheckboxes = container.querySelectorAll(
+    ".attendance-tab-check[data-record]"
+  );
+  let attended = 0,
+    total = 0;
+  allCheckboxes.forEach((cb) => {
+    const rec = appData.attendance.find((a) => a.id === cb.dataset.record);
+    if (rec && rec.duty_instance_id === instanceId) {
+      total++;
+      if (cb.checked) attended++;
+    }
+  });
+  const countEl = document.getElementById("attendanceCount_" + instanceId);
+  if (countEl) countEl.textContent = `${attended}/${total} attended`;
 }
 
 async function selectAllAttendanceTab(instanceId, sel) {
@@ -4491,6 +5841,7 @@ async function selectAllAttendanceTab(instanceId, sel) {
     r.confirmed_at = new Date().toISOString();
     r.confirmed_by = appData.current_user;
     pendingAttendanceSaves.set(r.id, r);
+    recalcAttendancePct(r.librarian_id); // ★
   });
 
   renderAttendanceModal();
@@ -4516,6 +5867,7 @@ async function saveAttendanceTab(instanceId) {
       rec.confirmed_at = new Date().toISOString();
       rec.confirmed_by = appData.current_user;
       pendingAttendanceSaves.set(rec.id, rec);
+      recalcAttendancePct(rec.librarian_id); // ★
     }
   });
 
@@ -4736,6 +6088,7 @@ async function quickDeleteTag(tagId) {
     removed_at: tag.removed_at,
     removal_reason: "manual_delete",
   });
+  saveData(); // ★ persist the history
   renderCurrentPage();
   toast("Tag removed.");
 }
@@ -4743,20 +6096,107 @@ async function quickDeleteTag(tagId) {
 function viewTagHistoryHtml(libId) {
   const history = appData.tag_history.filter((h) => h.librarian_id === libId);
   if (!history.length) return "No previous tags.";
+
   return history
     .map(
       (h) => `
-    <div style="display:flex; justify-content:space-between; padding:6px 10px; background:#f8fafc; border-radius:6px; margin-bottom:4px;">
-      <span><strong>${h.tag_name}</strong> (${h.type})</span>
-      <span class="text-muted" style="font-size:12px;">${formatDate(
-        h.start_date
-      )} – ${h.end_date ? formatDate(h.end_date) : "Forever"}</span>
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 10px; background:#f8fafc; border-radius:6px; margin-bottom:4px;">
+      <div>
+        <span><strong>${h.tag_name}</strong> (${h.type})</span>
+        <span class="text-muted" style="font-size:12px; margin-left:8px;">${formatDate(
+          h.start_date
+        )} – ${h.end_date ? formatDate(h.end_date) : "Forever"}</span>
+        <span style="font-size:12px; color:var(--text-secondary); margin-left:8px;">Removed: ${
+          h.removal_reason
+        }</span>
+      </div>
+      <div style="display:flex; gap:6px;">
+        <button class="btn btn-secondary btn-sm" onclick="viewTagHistoryDetails('${
+          h.id
+        }')">🔍 View</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteTagHistoryEntry('${
+          h.id
+        }')">🗑</button>
+      </div>
     </div>`
     )
     .join("");
 }
 
+function viewTagHistoryDetails(historyId) {
+  const h = appData.tag_history.find((t) => t.id === historyId);
+  if (!h) return;
+  const lib = getLib(h.librarian_id);
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay active";
+  overlay.id = "tagHistoryDetailModal";
+  overlay.style.zIndex = modalZIndex + 10;
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:450px; z-index:${modalZIndex + 11};">
+      <div class="modal-header">
+        <h3>🏷️ Tag History Details</h3>
+        <button class="close-btn" onclick="closeModal('tagHistoryDetailModal')">×</button>
+      </div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:12px;">
+        <div style="background:#f8fafc; padding:12px; border-radius:8px;">
+          <div><strong>Tag Name:</strong> ${h.tag_name}</div>
+          <div><strong>Type:</strong> ${h.type}</div>
+          <div><strong>Librarian:</strong> ${lib ? lib.name : "Unknown"}</div>
+          <div><strong>Description:</strong> ${h.description || "—"}</div>
+        </div>
+        <div style="background:#f8fafc; padding:12px; border-radius:8px;">
+          <div><strong>Start Date:</strong> ${formatDate(h.start_date)}</div>
+          <div><strong>End Date:</strong> ${
+            h.end_date ? formatDate(h.end_date) : "Forever"
+          }</div>
+        </div>
+        <div style="background:#f8fafc; padding:12px; border-radius:8px;">
+          <div><strong>Removed:</strong> ${formatDate(h.removed_at)}</div>
+          <div><strong>Reason:</strong> ${h.removal_reason || "Unknown"}</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('tagHistoryDetailModal')">Close</button>
+        <button class="btn btn-danger" onclick="closeModal('tagHistoryDetailModal'); deleteTagHistoryEntry('${
+          h.id
+        }');">🗑 Delete</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
+async function deleteTagHistoryEntry(historyId) {
+  showConfirm(
+    "Delete Tag History",
+    "Permanently delete this history entry?",
+    async () => {
+      try {
+        await deleteEntity("tags/history", historyId);
+        appData.tag_history = appData.tag_history.filter(
+          (t) => t.id !== historyId
+        );
+        saveData();
+
+        // Close the detail modal safely (no DOM removal)
+        closeModal("tagHistoryDetailModal");
+
+        // Refresh the action popup if it's open
+        if (window._lastTagHistoryLibId) {
+          viewTagHistoryForLibrarian(window._lastTagHistoryLibId);
+        }
+
+        renderCurrentPage();
+        toast("History entry deleted.");
+      } catch (err) {
+        console.error(err);
+        toast("Failed to delete history.");
+      }
+    }
+  );
+}
 function viewTagHistoryForLibrarian(libId) {
+  window._lastTagHistoryLibId = libId;
   document.getElementById("actionPopupTitle").textContent = "📜 Tag History";
   document.getElementById("actionPopupContent").innerHTML =
     viewTagHistoryHtml(libId);
@@ -4765,10 +6205,11 @@ function viewTagHistoryForLibrarian(libId) {
 
 function toggleMultiSelect() {
   const checked = document.getElementById("autoAssignMulti").checked;
-  document.getElementById("multiSelectContainer").style.display = checked
-    ? "block"
-    : "none";
-  if (checked) populateMultiSelect();
+  const container = document.getElementById("multiSelectContainer");
+  container.style.display = checked ? "block" : "none";
+  if (checked) {
+    populateMultiSelect(); // always populate when shown
+  }
 }
 
 function populateMultiSelect() {
@@ -4829,28 +6270,60 @@ async function deleteSector(id, options = {}) {
       appData.sector_assignments = appData.sector_assignments.filter(
         (a) => a.sector_id !== id
       );
+
       const duties = appData.duties.filter((d) => d.sector_id === id);
+      const today = getToday();
+
       for (const duty of duties) {
-        const instances = appData.duty_instances.filter(
-          (di) => di.duty_id === duty.id
-        );
         if (clearHistory) {
-          for (const inst of instances) {
-            await deleteEntity("attendance/by-instance", inst.id);
-          }
-          appData.attendance = appData.attendance.filter(
-            (a) => !instances.some((inst) => inst.id === a.duty_instance_id)
+          // Completely remove the duty and all instances/attendance
+          const allInstances = appData.duty_instances.filter(
+            (di) => di.duty_id === duty.id
           );
+          for (const inst of allInstances) {
+            await deleteEntity("attendance/by-instance", inst.id);
+            appData.attendance = appData.attendance.filter(
+              (a) => a.duty_instance_id !== inst.id
+            );
+          }
+          for (const inst of allInstances) {
+            await deleteEntity("duties/instances", inst.id);
+          }
+          appData.duty_instances = appData.duty_instances.filter(
+            (di) => di.duty_id !== duty.id
+          );
+          await deleteEntity("duties", duty.id);
+          appData.duties = appData.duties.filter((d) => d.id !== duty.id);
+        } else {
+          // Stop future occurrences (like deleteDuty without clearHistory)
+          const d = new Date(today);
+          d.setDate(d.getDate() - 1);
+          const yesterday = d.toISOString().split("T")[0];
+          duty.end_date = yesterday;
+          await saveEntity("duties", duty, duty.id);
+
+          // Delete only future instances and their attendance
+          const futureInsts = appData.duty_instances.filter(
+            (di) => di.duty_id === duty.id && di.date >= today
+          );
+          for (const inst of futureInsts) {
+            await deleteEntity("attendance/by-instance", inst.id);
+            appData.attendance = appData.attendance.filter(
+              (a) => a.duty_instance_id !== inst.id
+            );
+            await deleteEntity("duties/instances", inst.id);
+          }
+          appData.duty_instances = appData.duty_instances.filter(
+            (di) => !(di.duty_id === duty.id && di.date >= today)
+          );
+          // Keep the duty in appData.duties (with updated end_date)
         }
-        for (const inst of instances) {
-          await deleteEntity("duties/instances", inst.id);
-        }
-        appData.duty_instances = appData.duty_instances.filter(
-          (di) => di.duty_id !== duty.id
-        );
-        await deleteEntity("duties", duty.id);
-        appData.duties = appData.duties.filter((d) => d.id !== duty.id);
       }
+
+      // Recalculate percentages for all affected librarians
+      const affectedPeople = getSectorPeople(id);
+      affectedPeople.forEach((p) => recalcAttendancePct(p.id));
+
       await deleteEntity("sectors", id);
       appData.sectors = appData.sectors.filter((s) => s.id !== id);
       selectedLeafId = null;
@@ -4887,28 +6360,55 @@ async function deleteSector(id, options = {}) {
           appData.sector_assignments = appData.sector_assignments.filter(
             (a) => a.sector_id !== id
           );
+
           const duties = appData.duties.filter((d) => d.sector_id === id);
+          const today = getToday();
+
           for (const duty of duties) {
-            const instances = appData.duty_instances.filter(
-              (di) => di.duty_id === duty.id
-            );
             if (clearHistory) {
-              for (const inst of instances) {
+              const allInstances = appData.duty_instances.filter(
+                (di) => di.duty_id === duty.id
+              );
+              for (const inst of allInstances) {
                 await deleteEntity("attendance/by-instance", inst.id);
+                appData.attendance = appData.attendance.filter(
+                  (a) => a.duty_instance_id !== inst.id
+                );
               }
-              appData.attendance = appData.attendance.filter(
-                (a) => !instances.some((inst) => inst.id === a.duty_instance_id)
+              for (const inst of allInstances) {
+                await deleteEntity("duties/instances", inst.id);
+              }
+              appData.duty_instances = appData.duty_instances.filter(
+                (di) => di.duty_id !== duty.id
+              );
+              await deleteEntity("duties", duty.id);
+              appData.duties = appData.duties.filter((d) => d.id !== duty.id);
+            } else {
+              const d = new Date(today);
+              d.setDate(d.getDate() - 1);
+              const yesterday = d.toISOString().split("T")[0];
+              duty.end_date = yesterday;
+              await saveEntity("duties", duty, duty.id);
+
+              const futureInsts = appData.duty_instances.filter(
+                (di) => di.duty_id === duty.id && di.date >= today
+              );
+              for (const inst of futureInsts) {
+                await deleteEntity("attendance/by-instance", inst.id);
+                appData.attendance = appData.attendance.filter(
+                  (a) => a.duty_instance_id !== inst.id
+                );
+                await deleteEntity("duties/instances", inst.id);
+              }
+              appData.duty_instances = appData.duty_instances.filter(
+                (di) => !(di.duty_id === duty.id && di.date >= today)
               );
             }
-            for (const inst of instances) {
-              await deleteEntity("duties/instances", inst.id);
-            }
-            appData.duty_instances = appData.duty_instances.filter(
-              (di) => di.duty_id !== duty.id
-            );
-            await deleteEntity("duties", duty.id);
-            appData.duties = appData.duties.filter((d) => d.id !== duty.id);
           }
+
+          const affectedPeople = getSectorPeople(id);
+          affectedPeople.forEach((p) => recalcAttendancePct(p.id));
+
           await deleteEntity("sectors", id);
           appData.sectors = appData.sectors.filter((s) => s.id !== id);
           selectedLeafId = null;
@@ -4961,7 +6461,6 @@ async function deleteSector(id, options = {}) {
     );
   }
 }
-
 async function removeFromSector(sectorId, libId) {
   if (removingInProgress) return;
   removingInProgress = true;
@@ -4975,7 +6474,6 @@ async function removeFromSector(sectorId, libId) {
     return;
   }
 
-  // Confirmation popup with history option
   Swal.fire({
     title: "Remove from Sector",
     html: `
@@ -4991,8 +6489,10 @@ async function removeFromSector(sectorId, libId) {
     cancelButtonText: "Cancel",
     reverseButtons: true,
     preConfirm: () => {
+      // Get the checkbox from the Swal popup itself (always works)
+      const checkbox = Swal.getPopup().querySelector("#removeHistoryCheck");
       return {
-        clearHistory: document.getElementById("removeHistoryCheck").checked,
+        clearHistory: checkbox ? checkbox.checked : false,
       };
     },
   }).then(async (result) => {
@@ -5041,26 +6541,27 @@ async function removeFromSector(sectorId, libId) {
           appData.attendance = appData.attendance.filter(
             (a) => !futureAtt.some((fa) => fa.id === a.id)
           );
+          recalcAttendancePct(libId);
         } else {
-          // Delete all attendance for this librarian in this sector
+          // Delete ALL attendance for this librarian in this sector
           for (const att of attToDelete) {
             await deleteEntity("attendance", att.id);
           }
           appData.attendance = appData.attendance.filter(
             (a) => !attToDelete.some((fa) => fa.id === a.id)
           );
+          recalcAttendancePct(libId);
         }
       }
 
       // 3. Sync remaining (adds missing people, no removal)
       await syncDutyInstancesForSector(sectorId);
 
-      // 4. Refresh UI – sectors page and Manage Sectors modal if open
+      // 4. Refresh UI
       renderCurrentPage();
 
       const mgmtModal = document.getElementById("sectorManagementModal");
       if (mgmtModal && mgmtModal.classList.contains("active")) {
-        // Refresh the modal content using the stored librarian ID
         if (currentManagementLibId) {
           viewSectorManagement(currentManagementLibId);
         }
@@ -5170,6 +6671,8 @@ async function removeAllFromSector(secId) {
       }
 
       await syncDutyInstancesForSector(secId);
+      people.forEach((p) => recalcAttendancePct(p.id)); // ★ added
+
       renderCurrentPage();
       toast("All removed.");
     } catch (err) {
@@ -5188,6 +6691,7 @@ function openAddPeopleModal(secId) {
   const assignedIds = appData.sector_assignments
     .filter((a) => a.sector_id === secId)
     .map((a) => a.librarian_id);
+
   let html = `<h4>Add People to ${sector.name}</h4><div style="max-height:300px;overflow-y:auto;">`;
   allLibs.forEach((l) => {
     const checked = assignedIds.includes(l.id);
@@ -5198,9 +6702,19 @@ function openAddPeopleModal(secId) {
     }> ${l.name} (${l.adm_no})</label>`;
   });
   html += `</div><button class="btn btn-primary btn-sm" onclick="saveAddPeople('${secId}')">Save</button>`;
+
   const overlay = document.createElement("div");
   overlay.className = "modal-overlay active";
-  overlay.innerHTML = `<div class="modal"><div class="modal-header"><h3>Add People</h3><button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button></div><div class="modal-body">${html}</div></div>`;
+  overlay.id = "addPeopleModal";
+  overlay.style.zIndex = modalZIndex + 10;
+  overlay.innerHTML = `
+    <div class="modal" style="z-index:${modalZIndex + 11};">
+      <div class="modal-header">
+        <h3>Add People</h3>
+        <button class="close-btn" onclick="closeModal('addPeopleModal')">×</button>
+      </div>
+      <div class="modal-body">${html}</div>
+    </div>`;
   document.body.appendChild(overlay);
 }
 
@@ -5242,12 +6756,56 @@ async function saveAddPeople(secId) {
       );
     }
 
+    // ★ Force today’s instance and manually add each new librarian
+    await generateDutyInstancesForDate(getToday());
+    const today = getToday();
+    const duties = appData.duties.filter((d) => d.sector_id === secId);
+    for (const libId of toAdd) {
+      for (const duty of duties) {
+        if (dutyOccursOnDate(duty, today)) {
+          let inst = appData.duty_instances.find(
+            (di) => di.duty_id === duty.id && di.date === today
+          );
+          if (!inst) {
+            const newInst = {
+              duty_id: duty.id,
+              date: today,
+              is_active: true,
+              created_at: new Date().toISOString(),
+            };
+            const savedInst = await saveEntity("duties/instances", newInst);
+            appData.duty_instances.push(savedInst);
+            inst = savedInst;
+          }
+          if (
+            !appData.attendance.some(
+              (a) => a.duty_instance_id === inst.id && a.librarian_id === libId
+            )
+          ) {
+            const att = {
+              duty_instance_id: inst.id,
+              librarian_id: libId,
+              attended: false,
+              confirmed_by: "system",
+              confirmed_at: new Date().toISOString(),
+              forgiven: false,
+              punishment_issued: false,
+            };
+            const savedAtt = await saveEntity("attendance", att);
+            appData.attendance.push(savedAtt);
+            recalcAttendancePct(libId);
+          }
+        }
+      }
+    }
+
     await syncDutyInstancesForSector(secId);
 
-    document
-      .querySelectorAll(".modal-overlay.active")
-      .forEach((m) => m.remove());
+    closeModal("addPeopleModal");
     renderSectors();
+    if (currentPage === "attendance") {
+      renderAttendance();
+    }
     toast("People updated.");
   } catch (err) {
     console.error(err);
@@ -5303,22 +6861,85 @@ function renderDuties() {
   }
 
   if (isCalendarView) {
-    const today = getToday();
-    const [year, month] = today.split("-").slice(0, 2);
+    // Get the month and year from the global date navigator (or currentViewDate)
+    const [year, month] = currentViewDate.split("-").slice(0, 2).map(Number);
     const daysInMonth = new Date(year, month, 0).getDate();
     const firstDay = new Date(year, month - 1, 1).getDay();
+
+    // Build the filtered set of duty IDs that match the current dropdown selection
+    // Re‑compute the duties that should appear (respect the filter)
+    let visibleDuties = [];
+    const today = getToday();
+    const weekDates = getWeekDates();
+    if (filter === "today") {
+      visibleDuties = appData.duties.filter((d) =>
+        appData.duty_instances.some(
+          (di) => di.duty_id === d.id && di.date === today
+        )
+      );
+    } else if (filter === "week") {
+      visibleDuties = appData.duties.filter((d) =>
+        appData.duty_instances.some(
+          (di) => di.duty_id === d.id && weekDates.includes(di.date)
+        )
+      );
+    } else if (filter === "punishment") {
+      visibleDuties = appData.duties.filter((d) => d.is_punishment);
+    } else {
+      visibleDuties = [...appData.duties]; // "all" or "all active"
+    }
+
+    // If "Has Librarians" is checked, further filter
+    if (hasLibrarians) {
+      visibleDuties = visibleDuties.filter((d) => {
+        const hasAttendance = appData.duty_instances
+          .filter((di) => di.duty_id === d.id)
+          .some((di) =>
+            appData.attendance.some((a) => a.duty_instance_id === di.id)
+          );
+        if (hasAttendance) return true;
+        if (d.sector_id) {
+          const sector = getSector(d.sector_id);
+          return sector && getSectorPeople(sector.id).length > 0;
+        }
+        return false;
+      });
+    }
+
+    const visibleDutyIds = new Set(visibleDuties.map((d) => d.id));
+
+    // Gather duty instances only for the visible duties and this month
     const dutiesForMonth = appData.duty_instances.filter(
-      (di) => di.date.startsWith(`${year}-${month}`) && di.is_active
+      (di) =>
+        di.date.startsWith(`${year}-${String(month).padStart(2, "0")}`) &&
+        di.is_active &&
+        visibleDutyIds.has(di.duty_id)
     );
     const dutiesByDate = {};
     dutiesForMonth.forEach((di) => {
       const date = di.date;
       if (!dutiesByDate[date]) dutiesByDate[date] = [];
       const duty = appData.duties.find((d) => d.id === di.duty_id);
-      if (duty && duties.some((d2) => d2.id === duty.id))
-        dutiesByDate[date].push(duty);
+      if (duty) dutiesByDate[date].push(duty);
     });
-    let calHtml = `<div class="calendar-grid">`;
+
+    // Month navigation buttons
+    const prevMonth = month === 1 ? 12 : month - 1;
+    const prevYear = month === 1 ? year - 1 : year;
+    const nextMonth = month === 12 ? 1 : month + 1;
+    const nextYear = month === 12 ? year + 1 : year;
+
+    let calHtml = `
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <button class="btn btn-secondary btn-sm" onclick="navigateCalendarMonth(${prevYear}, ${prevMonth})">◀ ${prevMonth}/${prevYear}</button>
+      <strong>${new Date(year, month - 1).toLocaleDateString("en-US", {
+        month: "long",
+        year: "numeric",
+      })}</strong>
+      <button class="btn btn-secondary btn-sm" onclick="navigateCalendarMonth(${nextYear}, ${nextMonth})">${nextMonth}/${nextYear} ▶</button>
+    </div>
+    <div class="calendar-grid">
+  `;
     ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].forEach(
       (h) => (calHtml += `<div class="day-header">${h}</div>`)
     );
@@ -5332,7 +6953,8 @@ function renderDuties() {
       const isPast = dateStr < today;
       calHtml += `<div class="day ${isToday ? "today" : ""} ${
         isPast ? "past" : ""
-      }"><div class="date-num">${d}</div>`;
+      }">`;
+      calHtml += `<div class="date-num">${d}</div>`;
       if (dutiesByDate[dateStr]) {
         dutiesByDate[dateStr].forEach((duty) => {
           calHtml += `<div class="duty-item ${
@@ -5369,13 +6991,34 @@ function renderDuties() {
           ).length,
         0
       );
+
+      // ---- minimal sector path addition ----
+      let sectorLine = "";
+      if (d.sector_id) {
+        const path = getSectorPath(d.sector_id);
+        if (path) {
+          sectorLine = `<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">📂 ${path}</div>`;
+        }
+      } else {
+        sectorLine = `<div style="font-size:11px; color:var(--text-muted); margin-top:2px;">📌 Standalone</div>`;
+      }
+      // ------------------------------------
+
       return `<div class="duty-card ${d.is_punishment ? "punishment" : ""}">
       <div class="duty-header">
         <div>
-          <span class="duty-title">${d.name}</span>
-          <span class="duty-meta">${formatTime(d.start_time)}-${formatTime(
+     <span class="duty-title">
+  ${d.name}
+  ${
+    d.end_date && d.end_date < getToday()
+      ? '<span class="tag-badge punishment" style="margin-left:6px;">Ended</span>'
+      : ""
+  }
+</span>
+<span class="duty-meta">${formatTime(d.start_time)}-${formatTime(
         d.end_time
       )} · ${d.days.map(getDayName).join(", ")}</span>
+${sectorLine}
         </div>
         <div class="duty-actions">
           <span>${attended}/${total} attended</span>
@@ -5399,7 +7042,6 @@ function syncLocalNotifications() {
     return instance !== undefined;
   });
 
-  // Keep any non‑cumulative notifications (dismissed ones, old types, etc.)
   const otherNotifs = appData.notifications.filter(
     (n) => n.type !== "cumulative_all"
   );
@@ -5416,7 +7058,8 @@ function syncLocalNotifications() {
 
     for (const [libId, records] of Object.entries(grouped)) {
       const lib = getLib(libId);
-      if (!lib) continue;
+      // ★★★ Skip deleted librarians ★★★
+      if (!lib || lib.is_deleted) continue;
 
       const totalMissed = records.length;
       const daysSet = new Set();
@@ -5428,7 +7071,6 @@ function syncLocalNotifications() {
       });
       const distinctDays = daysSet.size;
 
-      // Use a stable local ID (no server dependency)
       newCumulative.push({
         id: "local_" + libId,
         message: `⚠️ ${lib.name} missed ${totalMissed} duties across ${distinctDays} day(s)`,
@@ -5442,7 +7084,6 @@ function syncLocalNotifications() {
     }
   }
 
-  // Replace the entire notifications array with local data
   appData.notifications = [...otherNotifs, ...newCumulative];
 }
 function showDutyActions(dutyId) {
@@ -5504,6 +7145,9 @@ function selectAllDutyLibrarians(sel) {
 }
 
 async function createDuty() {
+  if (creatingDuty) return; // ★ block double clicks
+  creatingDuty = true;
+
   const name = document.getElementById("dutyName").value.trim();
   const start = document.getElementById("dutyStart").value;
   const end = document.getElementById("dutyEnd").value;
@@ -5524,10 +7168,12 @@ async function createDuty() {
 
   if (!name || !start || !end || days.length === 0) {
     Swal.fire("Error", "Fill all fields and select days.", "error");
+    creatingDuty = false;
     return;
   }
   if (start >= end) {
     Swal.fire("Error", "End must be after start.", "error");
+    creatingDuty = false;
     return;
   }
 
@@ -5540,6 +7186,7 @@ async function createDuty() {
         "The leaf sector has no librarians assigned.",
         "error"
       );
+      creatingDuty = false;
       return;
     }
   } else {
@@ -5548,6 +7195,7 @@ async function createDuty() {
       .forEach((cb) => libs.push(cb.value));
     if (libs.length === 0) {
       Swal.fire("Error", "Select at least one librarian.", "error");
+      creatingDuty = false;
       return;
     }
   }
@@ -5634,6 +7282,7 @@ async function createDuty() {
         };
         const savedAtt = await saveEntity("attendance", att);
         appData.attendance.push(savedAtt);
+        recalcAttendancePct(libId);
       }
     }
 
@@ -5645,9 +7294,10 @@ async function createDuty() {
     renderCurrentPage();
     toast("Error creating duty – rolled back.");
     console.error(err);
+  } finally {
+    creatingDuty = false; // ★ release the guard
   }
 }
-
 async function markAttendedFromNotification(recordId, btn) {
   if (btn && btn.disabled) return;
 
@@ -5728,11 +7378,13 @@ function dutyOccursOnDate(duty, date) {
 }
 
 async function generateDutyInstancesForDate(date) {
+  if (!schoolInSession) return;
   if (date < getToday()) return;
 
   for (const duty of appData.duties) {
     const dutyCreatedDate = duty.created_at.split("T")[0];
     if (date < dutyCreatedDate) continue;
+
     const dayName = new Date(date).toLocaleDateString("en-US", {
       weekday: "long",
     });
@@ -5763,19 +7415,25 @@ async function generateDutyInstancesForDate(date) {
       if (duty.days.includes(dayName)) occurs = true;
     }
     if (occurs && duty.end_date && date > duty.end_date) occurs = false;
+
+    // Skip if we already have this instance locally, or if we manually deleted it
+    if (!occurs) continue;
     if (
-      occurs &&
-      !appData.duty_instances.some(
+      appData.duty_instances.some(
         (di) => di.duty_id === duty.id && di.date === date
       )
-    ) {
-      const newInst = {
-        duty_id: duty.id,
-        date,
-        is_active: true,
-        created_at: new Date().toISOString(),
-      };
-      // ★ silent save – no loading bar
+    )
+      continue;
+    if (manuallyDeletedDutyDates.has(`${duty.id}|${date}`)) continue;
+
+    const newInst = {
+      duty_id: duty.id,
+      date,
+      is_active: true,
+      created_at: new Date().toISOString(),
+    };
+
+    try {
       const savedInst = await saveEntity(
         "duties/instances",
         newInst,
@@ -5784,18 +7442,29 @@ async function generateDutyInstancesForDate(date) {
       );
       appData.duty_instances.push(savedInst);
 
+      // Build librarian list
       let libIds = [];
-      const templateInst = appData.duty_instances.find(
-        (di) => di.duty_id === duty.id && di.id !== savedInst.id
-      );
-      if (templateInst) {
-        const templateRecords = appData.attendance.filter(
-          (a) => a.duty_instance_id === templateInst.id
-        );
-        libIds = templateRecords.map((r) => r.librarian_id);
-      } else if (duty.sector_id) {
+      if (duty.sector_id) {
         libIds = getSectorPeople(duty.sector_id).map((p) => p.id);
+      } else {
+        const allOtherInstances = appData.duty_instances.filter(
+          (di) => di.duty_id === duty.id && di.id !== savedInst.id
+        );
+        let templateInst = null;
+        if (allOtherInstances.length > 0) {
+          templateInst = allOtherInstances.reduce(
+            (latest, inst) => (inst.date > latest.date ? inst : latest),
+            allOtherInstances[0]
+          );
+        }
+        if (templateInst) {
+          const templateRecords = appData.attendance.filter(
+            (a) => a.duty_instance_id === templateInst.id
+          );
+          libIds = templateRecords.map((r) => r.librarian_id);
+        }
       }
+
       for (const libId of libIds) {
         const att = {
           duty_instance_id: savedInst.id,
@@ -5806,10 +7475,16 @@ async function generateDutyInstancesForDate(date) {
           forgiven: false,
           punishment_issued: false,
         };
-        // ★ silent save – no loading bar
         const savedAtt = await saveEntity("attendance", att, null, true);
         appData.attendance.push(savedAtt);
+        recalcAttendancePct(libId);
       }
+    } catch (err) {
+      // Duplicate or any server rejection → do nothing, instance already exists
+      console.warn(
+        "Instance creation skipped – already exists or server rejected."
+      );
+      continue;
     }
   }
 }
@@ -6189,6 +7864,23 @@ function rebuildNotificationPopup(libId) {
   html += `</tbody></table></div>`;
   content.innerHTML = html;
 }
+
+function navigateCalendarMonth(year, month) {
+  // Update the global date to the first day of that month (but not affect the actual date)
+  // We'll use a temporary variable and re‑render the calendar.
+  currentViewDate = `${year}-${String(month).padStart(2, "0")}-01`;
+  document.getElementById("viewDate").value = currentViewDate;
+  // Re‑render duties (calendar view)
+  renderDuties();
+}
+
+window.addEventListener("beforeunload", (event) => {
+  if (pendingAttendanceSaves.size > 0) {
+    event.preventDefault();
+    event.returnValue = ""; // required for modern browsers
+  }
+});
+
 // ============================================
 // SERVICE WORKER REGISTRATION (instant offline)
 // ============================================

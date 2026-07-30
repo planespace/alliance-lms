@@ -15,6 +15,7 @@ const tagSchema = new mongoose.Schema({
   created_at: { type: Date, default: Date.now },
   updated_at: { type: Date, default: Date.now },
   removed_at: Date,
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }
 });
 
 tagSchema.index({ librarian_id: 1 });

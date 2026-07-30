@@ -17,6 +17,7 @@ const dutySchema = new mongoose.Schema({
   created_by: String,
   created_at: { type: Date, default: Date.now },
   updated_at: { type: Date, default: Date.now },
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }
 });
 dutySchema.index({ sector_id: 1 });
 module.exports = mongoose.model("Duty", dutySchema);

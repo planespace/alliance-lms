@@ -1,5 +1,5 @@
 // ============================================
-// File: models/TagHistory.js   (needed by tags routes)
+// File: models/TagHistory.js
 // ============================================
 const mongoose = require("mongoose");
 
@@ -13,6 +13,7 @@ const tagHistorySchema = new mongoose.Schema({
   end_date: String,
   removed_at: Date,
   removal_reason: String,
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }
 });
 
 module.exports = mongoose.model("TagHistory", tagHistorySchema);

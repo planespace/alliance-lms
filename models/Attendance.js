@@ -12,6 +12,7 @@ const attendanceSchema = new mongoose.Schema({
   forgiven: { type: Boolean, default: false },
   punishment_issued: { type: Boolean, default: false },
   notes: String,
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }
 });
 attendanceSchema.index({ duty_instance_id: 1 });
 attendanceSchema.index({ librarian_id: 1 });

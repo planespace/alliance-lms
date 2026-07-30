@@ -19,6 +19,7 @@ const attendanceRouter = require("./routes/attendance");
 const tagsRouter = require("./routes/tags");
 const notificationsRouter = require("./routes/notifications");
 const halloffameRouter = require("./routes/halloffame");
+
 // Import models for the combined endpoint
 const Librarian = require("./models/Librarian");
 const Sector = require("./models/Sector");
@@ -29,13 +30,14 @@ const Tag = require("./models/Tag");
 const Notification = require("./models/Notification");
 const { Captain, Committee } = require("./models/HallOfFame");
 const SectorAssignment = require("./models/SectorAssignment");
+const Setting = require("./models/Setting");
 const app = express();
 const compression = require("compression");
 
 // Middleware
 app.use(cors());
 app.use(compression());
-app.use(express.json());
+app.use(express.json({ limit: "10mb" }));
 
 // Serve static files (frontend)
 app.use(express.static(path.join(__dirname, "public")));
@@ -71,11 +73,12 @@ app.use("/api/attendance", attendanceRouter);
 app.use("/api/tags", tagsRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/halloffame", halloffameRouter);
+
 // Combined endpoint – returns all data in a single request
-// Combined endpoint – returns only necessary fields for speed
+// ⚠️ Cache-Control header REMOVED to prevent stale data after updates
 app.get("/api/all", protect, async (req, res) => {
   try {
-    res.set("Cache-Control", "private, max-age=120");
+    const userId = req.user._id;
     const [
       librarians,
       sectors,
@@ -89,7 +92,7 @@ app.get("/api/all", protect, async (req, res) => {
       assignments,
     ] = await Promise.all([
       Librarian.find(
-        {},
+        { user_id: userId },
         {
           name: 1,
           grade: 1,
@@ -101,7 +104,7 @@ app.get("/api/all", protect, async (req, res) => {
         }
       ).lean(),
       Sector.find(
-        {},
+        { user_id: userId },
         {
           name: 1,
           parent_id: 1,
@@ -113,7 +116,7 @@ app.get("/api/all", protect, async (req, res) => {
         }
       ).lean(),
       Duty.find(
-        {},
+        { user_id: userId },
         {
           name: 1,
           start_time: 1,
@@ -128,9 +131,12 @@ app.get("/api/all", protect, async (req, res) => {
           created_at: 1,
         }
       ).lean(),
-      DutyInstance.find({}, { duty_id: 1, date: 1, is_active: 1 }).lean(),
+      DutyInstance.find(
+        { user_id: userId },
+        { duty_id: 1, date: 1, is_active: 1 }
+      ).lean(),
       Attendance.find(
-        {},
+        { user_id: userId },
         {
           duty_instance_id: 1,
           librarian_id: 1,
@@ -142,7 +148,7 @@ app.get("/api/all", protect, async (req, res) => {
         }
       ).lean(),
       Tag.find(
-        { is_active: true },
+        { user_id: userId, is_active: true },
         {
           name: 1,
           description: 1,
@@ -155,7 +161,7 @@ app.get("/api/all", protect, async (req, res) => {
         }
       ).lean(),
       Notification.find(
-        {},
+        { user_id: userId },
         {
           message: 1,
           type: 1,
@@ -171,12 +177,12 @@ app.get("/api/all", protect, async (req, res) => {
         }
       ).lean(),
       Captain.find(
-        {},
+        { user_id: userId },
         { name: 1, adm_no: 1, year: 1, house: 1, photo_url: 1 }
       ).lean(),
-      Committee.find({}, { year: 1, members: 1 }).lean(),
+      Committee.find({ user_id: userId }, { year: 1, members: 1 }).lean(),
       SectorAssignment.find(
-        {},
+        { user_id: userId },
         { sector_id: 1, librarian_id: 1, assigned_at: 1 }
       ).lean(),
     ]);
@@ -196,7 +202,49 @@ app.get("/api/all", protect, async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 app.get("/ping", (req, res) => res.send("ok"));
+
+// School session setting – per user
+app.get("/api/settings/schoolSession", protect, async (req, res) => {
+  try {
+    let setting = await Setting.findOne({ user_id: req.user._id });
+    if (!setting) {
+      setting = new Setting({
+        user_id: req.user._id,
+        tagExpiryNotificationDays: 1,
+        forgottenNotificationRetentionDays: 15,
+        punishmentAutoDismissDays: 2,
+        cumulativeMissedDutiesThreshold: 3,
+        schoolInSession: true,
+      });
+      await setting.save();
+    }
+    res.json({ schoolInSession: setting.schoolInSession });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/settings/schoolSession", protect, async (req, res) => {
+  try {
+    const { schoolInSession } = req.body;
+    if (typeof schoolInSession !== "boolean") {
+      return res
+        .status(400)
+        .json({ error: "schoolInSession must be a boolean" });
+    }
+    let setting = await Setting.findOne({ user_id: req.user._id });
+    if (!setting) {
+      setting = new Setting({ user_id: req.user._id });
+    }
+    setting.schoolInSession = schoolInSession;
+    await setting.save();
+    res.json({ schoolInSession: setting.schoolInSession });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Serve frontend for any other route (SPA fallback)
 app.get("*", (req, res) => {

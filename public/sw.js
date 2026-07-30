@@ -1,5 +1,5 @@
 // public/sw.js
-const CACHE_NAME = "alliance-lms-v2";
+const CACHE_NAME = "alliance-lms-v5";
 
 // Assets to cache immediately on install
 const PRECACHE_URLS = [
@@ -35,40 +35,32 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
-  // Handle the API data endpoint – cache-first, then background refresh
-  if (url.pathname === "/api/all") {
-    event.respondWith(
-      caches.open(CACHE_NAME).then((cache) =>
-        cache.match(event.request).then((cachedResponse) => {
-          // Revalidate in background
-          const networkFetch = fetch(event.request)
-            .then((networkResponse) => {
-              cache.put(event.request, networkResponse.clone());
-              console.log("✅ Service Worker – fresh /api/all cached");
-              return networkResponse;
-            })
-            .catch(() =>
-              console.warn(
-                "⚠️ Service Worker – network fetch failed, using cache"
-              )
-            );
+  // Never cache API requests – always go network
+  if (url.pathname.startsWith("/api")) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
 
-          if (cachedResponse) {
-            console.log("⚡ Service Worker – serving /api/all from cache");
-            return cachedResponse;
-          }
-          console.log("⏳ Service Worker – no cache, waiting for network");
-          return networkFetch;
+  // For JavaScript and CSS files, network first, fall back to cache
+  if (url.pathname.endsWith(".js") || url.pathname.endsWith(".css")) {
+    event.respondWith(
+      fetch(event.request)
+        .then((networkResponse) => {
+          const responseClone = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, responseClone);
+          });
+          return networkResponse;
         })
-      )
+        .catch(() => caches.match(event.request))
     );
     return;
   }
 
-  // All other requests – cache-first with network fallback
+  // For all other static assets, cache first, fall back to network
   event.respondWith(
-    caches
-      .match(event.request)
-      .then((cachedResponse) => cachedResponse || fetch(event.request))
+    caches.match(event.request).then((cachedResponse) => {
+      return cachedResponse || fetch(event.request);
+    })
   );
 });

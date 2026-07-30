@@ -12,6 +12,7 @@ const sectorSchema = new mongoose.Schema({
   duty_settings_list: [Object],
   leader_ids: [String],
   created_at: { type: Date, default: Date.now },
+  user_id: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true }
 });
 
 module.exports = mongoose.model("Sector", sectorSchema);
